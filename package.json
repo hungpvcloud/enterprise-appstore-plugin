@@ -1,0 +1,25 @@
+{
+  "name": "cordova-plugin-enterprise-appstore",
+  "version": "1.0.0",
+  "description": "Enterprise App Store Plugin for OutSystems Mobile - Download & Install Apps",
+  "cordova": {
+    "id": "cordova-plugin-enterprise-appstore",
+    "platforms": ["android", "ios"]
+  },
+  "keywords": [
+    "cordova",
+    "outsystems",
+    "enterprise",
+    "appstore",
+    "download",
+    "install",
+    "ecosystem:cordova",
+    "cordova-android",
+    "cordova-ios"
+  ],
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "author": "Hung Pham Van - FSOFT",
+  "license": "MIT"
+}
