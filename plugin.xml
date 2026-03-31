@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<plugin 
+<plugin
     id="enterprise-appstore-plugin"
     version="1.0.0"
     xmlns="http://apache.org/cordova/ns/plugins/1.0"
@@ -9,42 +9,42 @@
     <description>Enterprise App Store Plugin - Download and Install Apps</description>
     <license>MIT</license>
     <keywords>cordova, outsystems, enterprise, appstore, download, install</keywords>
+
+    <!-- Engine requirements -->
     <engines>
-        <engine name="cordova" version=">=10.0.0" />
+        <engine name="cordova"         version=">=10.0.0" />
         <engine name="cordova-android" version=">=10.0.0" />
-        <engine name="cordova-ios" version=">=6.0.0" />
+        <engine name="cordova-ios"     version=">=6.0.0"  />
     </engines>
 
-    <!-- JavaScript bridge -->
+    <!-- JavaScript Bridge -->
     <js-module src="www/EnterpriseAppStore.js" name="EnterpriseAppStore">
         <clobbers target="window.EnterpriseAppStore" />
     </js-module>
 
-    <!-- ==================== ANDROID ==================== -->
+    <!-- ============================================================
+         ANDROID
+    ============================================================ -->
     <platform name="android">
+
+        <!-- AndroidX dependencies -->
+        <framework src="androidx.core:core:1.9.0" />
+        <framework src="androidx.appcompat:appcompat:1.6.1" />
 
         <!-- Permissions -->
         <config-file target="AndroidManifest.xml" parent="/*">
             <uses-permission android:name="android.permission.INTERNET" />
             <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
-            <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+            <uses-permission
+                android:name="android.permission.WRITE_EXTERNAL_STORAGE"
                 android:maxSdkVersion="28" />
-            <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+            <uses-permission
+                android:name="android.permission.READ_EXTERNAL_STORAGE"
                 android:maxSdkVersion="32" />
         </config-file>
 
-        <!-- Register Plugin + FileProvider -->
+        <!-- FileProvider registration (NO <receiver> - using inline registerReceiver) -->
         <config-file target="AndroidManifest.xml" parent="application">
-            <!-- Plugin feature -->
-            <receiver
-                android:name="com.enterprise.appstore.DownloadReceiver"
-                android:exported="false">
-                <intent-filter>
-                    <action android:name="android.intent.action.DOWNLOAD_COMPLETE"/>
-                </intent-filter>
-            </receiver>
-
-            <!-- FileProvider riêng - tránh conflict -->
             <provider
                 android:name="com.enterprise.appstore.EnterpriseAppStoreFileProvider"
                 android:authorities="${applicationId}.enterprise.appstore.provider"
@@ -56,7 +56,7 @@
             </provider>
         </config-file>
 
-        <!-- Khai báo plugin với Cordova -->
+        <!-- Cordova feature registration -->
         <config-file target="res/xml/config.xml" parent="/*">
             <feature name="EnterpriseAppStore">
                 <param name="android-package"
@@ -64,29 +64,41 @@
             </feature>
         </config-file>
 
-        <!-- Copy source files -->
-        <source-file src="src/android/EnterpriseAppStore.java"
-                     target-dir="src/com/enterprise/appstore" />
-        <source-file src="src/android/EnterpriseAppStoreFileProvider.java"
-                     target-dir="src/com/enterprise/appstore" />
+        <!-- Java source files -->
+        <source-file
+            src="src/android/EnterpriseAppStore.java"
+            target-dir="src/com/enterprise/appstore" />
+        <source-file
+            src="src/android/EnterpriseAppStoreFileProvider.java"
+            target-dir="src/com/enterprise/appstore" />
 
-        <!-- FileProvider paths XML -->
-        <resource-file src="res/android/xml/enterprise_appstore_paths.xml"
-                       target="res/xml/enterprise_appstore_paths.xml" />
+        <!-- FileProvider paths resource file -->
+        <resource-file
+            src="res/android/xml/enterprise_appstore_paths.xml"
+            target="res/xml/enterprise_appstore_paths.xml" />
+
     </platform>
 
-    <!-- ==================== iOS ==================== -->
+    <!-- ============================================================
+         iOS
+    ============================================================ -->
     <platform name="ios">
+
+        <!-- Cordova feature registration -->
         <config-file target="config.xml" parent="/*">
             <feature name="EnterpriseAppStore">
                 <param name="ios-package" value="EnterpriseAppStore" />
             </feature>
         </config-file>
 
+        <!-- UIKit framework -->
+        <framework src="UIKit.framework" weak="false" />
+
+        <!-- Swift source file -->
         <source-file src="src/ios/EnterpriseAppStore.swift" />
 
-        <!-- Swift support -->
-        <dependency id="cordova-plugin-add-swift-support" version="2.0.2" />
+        <!-- NOTE: cordova-plugin-add-swift-support is NOT needed for MABS 10+ -->
+
     </platform>
 
 </plugin>
