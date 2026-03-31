@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<plugin xmlns="http://apache.org/cordova/ns/plugins/1.0"
+<plugin 
     id="enterprise-appstore-plugin"
-    version="1.0.0">
+    version="1.0.0"
+    xmlns="http://apache.org/cordova/ns/plugins/1.0"
+    xmlns:android="http://schemas.android.com/apk/res/android">
 
     <name>EnterpriseAppStore</name>
     <description>Enterprise App Store Plugin - Download and Install Apps</description>
