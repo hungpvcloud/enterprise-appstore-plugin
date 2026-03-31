@@ -1,9 +1,9 @@
 {
-  "name": "cordova-plugin-enterprise-appstore",
+  "name": "enterprise-appstore-plugin",
   "version": "1.0.0",
   "description": "Enterprise App Store Plugin for OutSystems Mobile - Download & Install Apps",
   "cordova": {
-    "id": "cordova-plugin-enterprise-appstore",
+    "id": "enterprise-appstore-plugin",
     "platforms": ["android", "ios"]
   },
   "keywords": [
