@@ -22,6 +22,10 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import android.content.pm.PackageManager;
+import android.provider.Settings;
+
+
 import java.io.File;
 
 public class EnterpriseAppStore extends CordovaPlugin {
@@ -32,6 +36,9 @@ public class EnterpriseAppStore extends CordovaPlugin {
     private Handler progressHandler;
     private Runnable progressRunnable;
     private BroadcastReceiver downloadReceiver;
+    
+    private static final int REQUEST_INSTALL_PERMISSION = 1001;
+
 
     @Override
     public boolean execute(String action, JSONArray args, CallbackContext callbackContext)
@@ -57,6 +64,17 @@ public class EnterpriseAppStore extends CordovaPlugin {
             case "cancelDownload":
                 this.cancelDownload(callbackContext);
                 return true;
+            
+
+            case "checkInstallPermission":
+                this.checkInstallPermission(callbackContext);
+                return true;
+            
+            case "requestInstallPermission":
+                this.requestInstallPermission(callbackContext);
+                return true;
+
+
         }
         return false;
     }
@@ -225,12 +243,26 @@ public class EnterpriseAppStore extends CordovaPlugin {
     private void installApk(File apkFile, CallbackContext callbackContext) {
         try {
             Context context = cordova.getContext();
+            
+            // ✅ KIỂM TRA permission trước khi install (Android 8+)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                if (!context.getPackageManager().canRequestPackageInstalls()) {
+                    // Chưa có permission → Yêu cầu user bật
+                    JSONObject error = new JSONObject();
+                    error.put("error", "INSTALL_PERMISSION_REQUIRED");
+                    error.put("message", 
+                        "App needs permission to install packages. " +
+                        "Call requestInstallPermission() first.");
+                    callbackContext.error(error.toString());
+                    return;
+                }
+            }
+            
             Intent intent = new Intent(Intent.ACTION_VIEW);
             intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
 
             Uri apkUri;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                // Android 7+ dùng FileProvider — tránh FileUriExposedException
                 apkUri = FileProvider.getUriForFile(
                         context,
                         context.getPackageName() + ".enterprise.appstore.provider",
@@ -247,7 +279,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
             sendProgress(callbackContext, "INSTALL_PROMPT", 100,
                     "Installation dialog opened");
 
-            // Gửi success cuối cùng
             JSONObject result = new JSONObject();
             result.put("status", "SUCCESS");
             result.put("message", "APK installation started");
@@ -335,4 +366,57 @@ public class EnterpriseAppStore extends CordovaPlugin {
         if (bytes < 1024 * 1024) return String.format("%.1f KB", bytes / 1024.0);
         return String.format("%.1f MB", bytes / (1024.0 * 1024));
     }
+
+    
+    private void checkInstallPermission(CallbackContext callbackContext) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Context context = cordova.getContext();
+            boolean canInstall = context.getPackageManager()
+                    .canRequestPackageInstalls();
+            
+            JSONObject result = new JSONObject();
+            try {
+                result.put("hasPermission", canInstall);
+                callbackContext.success(result);
+            } catch (JSONException e) {
+                callbackContext.error("ERROR_CHECK_PERMISSION");
+            }
+        } else {
+            // Android < 8.0 không cần permission này
+            try {
+                JSONObject result = new JSONObject();
+                result.put("hasPermission", true);
+                callbackContext.success(result);
+            } catch (JSONException e) {
+                callbackContext.error("ERROR_CHECK_PERMISSION");
+            }
+        }
+    }
+
+    
+    private void requestInstallPermission(CallbackContext callbackContext) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Context context = cordova.getContext();
+            
+            if (!context.getPackageManager().canRequestPackageInstalls()) {
+                // Mở Settings để user cấp permission
+                Intent intent = new Intent(
+                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:" + context.getPackageName())
+                );
+                cordova.getActivity().startActivityForResult(
+                    intent, 
+                    REQUEST_INSTALL_PERMISSION
+                );
+                
+                callbackContext.success("PERMISSION_REQUESTED");
+            } else {
+                callbackContext.success("PERMISSION_ALREADY_GRANTED");
+            }
+        } else {
+            callbackContext.success("PERMISSION_NOT_NEEDED");
+        }
+    }
+
+
 }
