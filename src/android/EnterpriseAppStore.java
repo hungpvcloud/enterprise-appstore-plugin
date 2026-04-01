@@ -1,5 +1,6 @@
 package com.enterprise.appstore;
 
+import android.app.Activity;
 import android.app.DownloadManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -11,6 +12,7 @@ import android.os.Build;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.Settings;
 import android.util.Log;
 
 import androidx.core.content.FileProvider;
@@ -21,10 +23,6 @@ import org.apache.cordova.PluginResult;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
-
-import android.content.pm.PackageManager;
-import android.provider.Settings;
-
 
 import java.io.File;
 
@@ -39,6 +37,12 @@ public class EnterpriseAppStore extends CordovaPlugin {
     
     private static final int REQUEST_INSTALL_PERMISSION = 1001;
 
+     // ✅ Lưu lại thông tin pending install
+    // khi user đi Settings rồi quay lại
+    private String pendingInstallUrl      = null;
+    private String pendingInstallFileName = null;
+    private CallbackContext pendingInstallCallback = null;
+
 
     @Override
     public boolean execute(String action, JSONArray args, CallbackContext callbackContext)
@@ -46,35 +50,37 @@ public class EnterpriseAppStore extends CordovaPlugin {
 
         switch (action) {
             case "downloadAndInstall":
-                String url = args.getString(0);
+                String url      = args.getString(0);
                 String fileName = args.getString(1);
+                // Tự động thêm .apk
+                if (!fileName.toLowerCase().endsWith(".apk")) {
+                    fileName = fileName + ".apk";
+                }
                 this.downloadAndInstall(url, fileName, callbackContext);
                 return true;
 
+            case "checkInstallPermission":
+                this.checkInstallPermission(callbackContext);
+                return true;
+
+            case "requestInstallPermission":
+                String reqUrl      = args.optString(0, null);
+                String reqFileName = args.optString(1, null);
+                this.requestInstallPermission(
+                        reqUrl, reqFileName, callbackContext);
+                return true;
+
             case "getAppVersion":
-                String packageName = args.getString(0);
-                this.getAppVersion(packageName, callbackContext);
+                this.getAppVersion(args.getString(0), callbackContext);
                 return true;
 
             case "isAppInstalled":
-                String pkg = args.getString(0);
-                this.isAppInstalled(pkg, callbackContext);
+                this.isAppInstalled(args.getString(0), callbackContext);
                 return true;
 
             case "cancelDownload":
                 this.cancelDownload(callbackContext);
                 return true;
-            
-
-            case "checkInstallPermission":
-                this.checkInstallPermission(callbackContext);
-                return true;
-            
-            case "requestInstallPermission":
-                this.requestInstallPermission(callbackContext);
-                return true;
-
-
         }
         return false;
     }
@@ -186,7 +192,7 @@ public class EnterpriseAppStore extends CordovaPlugin {
     // ─────────────────────────────────────────────
 
     private void registerDownloadReceiver(DownloadManager dm, File apkFile,
-                                        CallbackContext callbackContext) {
+                                      CallbackContext callbackContext) {
         Context context = cordova.getContext();
 
         downloadReceiver = new BroadcastReceiver() {
@@ -196,6 +202,7 @@ public class EnterpriseAppStore extends CordovaPlugin {
                         DownloadManager.EXTRA_DOWNLOAD_ID, -1);
                 if (id != downloadId) return;
 
+                // Dừng progress tracking
                 if (progressHandler != null) {
                     progressHandler.removeCallbacks(progressRunnable);
                 }
@@ -205,51 +212,59 @@ public class EnterpriseAppStore extends CordovaPlugin {
                 Cursor cursor = dm.query(query);
 
                 if (cursor != null && cursor.moveToFirst()) {
-                    int status = cursor.getInt(
-                            cursor.getColumnIndexOrThrow(
-                                    DownloadManager.COLUMN_STATUS));
+                    int status = cursor.getInt(cursor.getColumnIndexOrThrow(
+                            DownloadManager.COLUMN_STATUS));
 
-                    // ✅ Lấy đường dẫn thực tế từ DownloadManager
-                    String localUri = cursor.getString(
-                            cursor.getColumnIndexOrThrow(
-                                    DownloadManager.COLUMN_LOCAL_URI));
+                    // ✅ Lấy filePath thực tế
+                    String localUri = cursor.getString(cursor.getColumnIndexOrThrow(
+                            DownloadManager.COLUMN_LOCAL_URI));
                     cursor.close();
 
                     if (status == DownloadManager.STATUS_SUCCESSFUL) {
-                        // ✅ Convert URI → absolute path
-                        String filePath = "";
+                        // Resolve filePath
+                        String filePath = apkFile.getAbsolutePath();
                         try {
                             if (localUri != null) {
                                 Uri uri = Uri.parse(localUri);
                                 if ("file".equals(uri.getScheme())) {
-                                    filePath = uri.getPath(); // /storage/emulated/0/Download/app.apk
-                                } else {
-                                    filePath = apkFile.getAbsolutePath();
+                                    filePath = uri.getPath();
                                 }
-                            } else {
-                                filePath = apkFile.getAbsolutePath();
                             }
-                        } catch (Exception e) {
-                            filePath = apkFile.getAbsolutePath();
-                        }
+                        } catch (Exception ignored) {}
 
-                        Log.d(TAG, "Download complete. File path: " + filePath);
+                        Log.d(TAG, "✅ Download complete: " + filePath);
 
-                        // ✅ Gửi progress kèm filePath
-                        sendProgressWithPath(callbackContext, "DOWNLOAD_COMPLETE",
-                                100, "Download complete. Starting installation...",
+                        // ✅ Step 1: Thông báo download xong (keepCallback=true)
+                        sendProgressWithPath(callbackContext,
+                                "DOWNLOAD_COMPLETE", 100,
+                                "Download complete. Starting install...",
                                 filePath);
 
-                        // Install APK
+                        // ✅ Step 2: Tiến hành install
+                        // (installApk sẽ gửi callback CUỐI với keepCallback=false)
                         installApk(apkFile, filePath, callbackContext);
+
                     } else {
-                        callbackContext.error("DOWNLOAD_FAILED_STATUS: " + status);
+                        // ✅ Download thất bại → callback cuối
+                        try {
+                            JSONObject err = new JSONObject();
+                            err.put("status",   "ERROR");
+                            err.put("message",  "Download failed. Status: " + status);
+                            err.put("progress", 0);
+                            err.put("filePath", "");
+
+                            PluginResult pr = new PluginResult(
+                                    PluginResult.Status.ERROR, err);
+                            pr.setKeepCallback(false);
+                            callbackContext.sendPluginResult(pr);
+                        } catch (JSONException e) {
+                            callbackContext.error("DOWNLOAD_FAILED");
+                        }
                     }
                 }
 
-                try {
-                    context.unregisterReceiver(this);
-                } catch (Exception ignored) {}
+                try { context.unregisterReceiver(this); }
+                catch (Exception ignored) {}
                 downloadId = -1;
             }
         };
@@ -269,21 +284,29 @@ public class EnterpriseAppStore extends CordovaPlugin {
     // INSTALL APK — FileProvider cho Android 7+
     // ─────────────────────────────────────────────
     
+    
     private void installApk(File apkFile, String filePath,
                             CallbackContext callbackContext) {
         try {
             Context context = cordova.getContext();
 
-            // Kiểm tra permission (Android 8+)
+            // ── Kiểm tra permission ──
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 if (!context.getPackageManager().canRequestPackageInstalls()) {
                     try {
-                        JSONObject error = new JSONObject();
-                        error.put("error", "INSTALL_PERMISSION_REQUIRED");
-                        error.put("filePath", filePath); // ✅ Trả về path dù lỗi
-                        error.put("message",
-                                "Please enable 'Install unknown apps' permission.");
-                        callbackContext.error(error.toString());
+                        JSONObject err = new JSONObject();
+                        err.put("status",   "ERROR");
+                        err.put("error",    "INSTALL_PERMISSION_REQUIRED");
+                        err.put("filePath", filePath);
+                        err.put("message",
+                            "Enable 'Install unknown apps' in Settings first.");
+                        err.put("progress", 0);
+
+                        // ✅ keepCallback = false → đây là callback CUỐI
+                        PluginResult pr = new PluginResult(
+                                PluginResult.Status.ERROR, err);
+                        pr.setKeepCallback(false);
+                        callbackContext.sendPluginResult(pr);
                     } catch (JSONException e) {
                         callbackContext.error("INSTALL_PERMISSION_REQUIRED");
                     }
@@ -291,6 +314,7 @@ public class EnterpriseAppStore extends CordovaPlugin {
                 }
             }
 
+            // ── Build intent ──
             Intent intent = new Intent(Intent.ACTION_VIEW);
             intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
 
@@ -309,18 +333,20 @@ public class EnterpriseAppStore extends CordovaPlugin {
                     "application/vnd.android.package-archive");
             context.startActivity(intent);
 
-            // ✅ Gửi SUCCESS kèm filePath
+            // ✅ Gửi INSTALL_PROMPT — keepCallback = false → callback CUỐI
             try {
                 JSONObject result = new JSONObject();
-                result.put("status", "SUCCESS");
-                result.put("message", "APK installation started");
-                result.put("filePath", filePath);           // ✅ absolute path
-                result.put("fileUri", apkUri.toString());   // ✅ content URI
+                result.put("status",   "INSTALL_PROMPT"); // ← JS sẽ $resolve() tại đây
+                result.put("message",  "Installation dialog opened");
+                result.put("progress", 100);
+                result.put("filePath", filePath);
+                result.put("fileUri",  apkUri.toString());
 
-                PluginResult pluginResult = new PluginResult(
+                PluginResult pr = new PluginResult(
                         PluginResult.Status.OK, result);
-                pluginResult.setKeepCallback(false);
-                callbackContext.sendPluginResult(pluginResult);
+                pr.setKeepCallback(false); // ✅ QUAN TRỌNG — Đánh dấu callback cuối
+                callbackContext.sendPluginResult(pr);
+
             } catch (JSONException e) {
                 callbackContext.success(filePath);
             }
@@ -330,6 +356,7 @@ public class EnterpriseAppStore extends CordovaPlugin {
             callbackContext.error("INSTALL_ERROR: " + e.getMessage());
         }
     }
+
 
     
     private void sendProgressWithPath(CallbackContext cb, String status,
@@ -429,52 +456,178 @@ public class EnterpriseAppStore extends CordovaPlugin {
 
     
     private void checkInstallPermission(CallbackContext callbackContext) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Context context = cordova.getContext();
-            boolean canInstall = context.getPackageManager()
-                    .canRequestPackageInstalls();
-            
+        try {
+            boolean canInstall = true;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                canInstall = cordova.getContext()
+                        .getPackageManager()
+                        .canRequestPackageInstalls();
+            }
             JSONObject result = new JSONObject();
-            try {
-                result.put("hasPermission", canInstall);
-                callbackContext.success(result);
-            } catch (JSONException e) {
-                callbackContext.error("ERROR_CHECK_PERMISSION");
-            }
-        } else {
-            // Android < 8.0 không cần permission này
-            try {
-                JSONObject result = new JSONObject();
-                result.put("hasPermission", true);
-                callbackContext.success(result);
-            } catch (JSONException e) {
-                callbackContext.error("ERROR_CHECK_PERMISSION");
-            }
+            result.put("hasPermission", canInstall);
+            callbackContext.success(result);
+        } catch (JSONException e) {
+            callbackContext.error("ERROR_CHECK_PERMISSION");
         }
     }
 
     
-    private void requestInstallPermission(CallbackContext callbackContext) {
+    // ─────────────────────────────────────────────
+    // REQUEST PERMISSION
+    // ✅ Lưu url + fileName để tự động resume sau khi
+    //    user bật permission và quay lại app
+    // ─────────────────────────────────────────────
+    private void requestInstallPermission(String url, String fileName,
+                                          CallbackContext callbackContext) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Context context = cordova.getContext();
-            
+
             if (!context.getPackageManager().canRequestPackageInstalls()) {
-                // Mở Settings để user cấp permission
+
+                // ✅ Lưu lại thông tin để resume sau khi user back
+                pendingInstallUrl      = url;
+                pendingInstallFileName = fileName;
+                pendingInstallCallback = callbackContext;
+
+                // Mở Settings → trang permission của app này
                 Intent intent = new Intent(
-                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                    Uri.parse("package:" + context.getPackageName())
+                        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:" + context.getPackageName())
                 );
+
+                // Dùng startActivityForResult để nhận callback
+                // khi user quay lại
+                cordova.setActivityResultCallback(this);
                 cordova.getActivity().startActivityForResult(
-                    intent, 
-                    REQUEST_INSTALL_PERMISSION
-                );
-                
-                callbackContext.success("PERMISSION_REQUESTED");
+                        intent, REQUEST_INSTALL_PERMISSION);
+
+                // Thông báo đang chờ user cấp permission
+                sendStatus(callbackContext,
+                        "WAITING_PERMISSION", 0,
+                        "Please enable 'Install unknown apps' then return to app.",
+                        "", true); // keepCallback = true → chờ tiếp
+
             } else {
-                callbackContext.success("PERMISSION_ALREADY_GRANTED");
+                // Đã có permission rồi
+                if (url != null && !url.isEmpty()) {
+                    // Có url → tiến hành download luôn
+                    downloadAndInstall(url, fileName, callbackContext);
+                } else {
+                    // Không có url → chỉ báo đã có permission
+                    try {
+                        JSONObject result = new JSONObject();
+                        result.put("status", "PERMISSION_ALREADY_GRANTED");
+                        result.put("hasPermission", true);
+                        callbackContext.success(result);
+                    } catch (JSONException e) {
+                        callbackContext.success("PERMISSION_ALREADY_GRANTED");
+                    }
+                }
             }
         } else {
-            callbackContext.success("PERMISSION_NOT_NEEDED");
+            // Android < 8 không cần permission
+            if (url != null && !url.isEmpty()) {
+                downloadAndInstall(url, fileName, callbackContext);
+            } else {
+                callbackContext.success("PERMISSION_NOT_NEEDED");
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    //  onActivityResult — Nhận kết quả từ Settings
+    //    Tự động resume download+install sau khi
+    //    user bật permission và back về app
+    // ─────────────────────────────────────────────
+    @Override
+    public void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == REQUEST_INSTALL_PERMISSION) {
+
+            Context context = cordova.getContext();
+            boolean hasPermission = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                    && context.getPackageManager().canRequestPackageInstalls();
+
+            Log.d(TAG, "onActivityResult: hasPermission = " + hasPermission);
+
+            if (pendingInstallCallback == null) return;
+
+            if (hasPermission) {
+                //  User đã cấp permission
+                if (pendingInstallUrl != null && !pendingInstallUrl.isEmpty()) {
+                    //  Tự động resume download + install
+                    Log.d(TAG, "Permission granted → Resume download: "
+                            + pendingInstallFileName);
+
+                    sendStatus(pendingInstallCallback,
+                            "PERMISSION_GRANTED", 0,
+                            "Permission granted. Starting download...",
+                            "", true);
+
+                    downloadAndInstall(
+                            pendingInstallUrl,
+                            pendingInstallFileName,
+                            pendingInstallCallback);
+                } else {
+                    // Không có URL pending → chỉ báo permission OK
+                    try {
+                        JSONObject result = new JSONObject();
+                        result.put("status", "PERMISSION_GRANTED");
+                        result.put("hasPermission", true);
+                        result.put("message", "Permission granted successfully.");
+
+                        PluginResult pr = new PluginResult(
+                                PluginResult.Status.OK, result);
+                        pr.setKeepCallback(false);
+                        pendingInstallCallback.sendPluginResult(pr);
+                    } catch (JSONException e) {
+                        pendingInstallCallback.success("PERMISSION_GRANTED");
+                    }
+                }
+            } else {
+                //  User từ chối / không bật permission
+                try {
+                    JSONObject result = new JSONObject();
+                    result.put("status", "PERMISSION_DENIED");
+                    result.put("hasPermission", false);
+                    result.put("message",
+                            "Install permission denied. " +
+                            "Cannot install APK without this permission.");
+
+                    PluginResult pr = new PluginResult(
+                            PluginResult.Status.ERROR, result);
+                    pr.setKeepCallback(false);
+                    pendingInstallCallback.sendPluginResult(pr);
+                } catch (JSONException e) {
+                    pendingInstallCallback.error("PERMISSION_DENIED");
+                }
+            }
+
+            //  Reset pending state
+            pendingInstallUrl      = null;
+            pendingInstallFileName = null;
+            pendingInstallCallback = null;
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    // HELPER: Gửi status callback
+    // ─────────────────────────────────────────────
+    private void sendStatus(CallbackContext cb, String status,
+                             int progress, String message,
+                             String filePath, boolean keepCallback) {
+        try {
+            JSONObject data = new JSONObject();
+            data.put("status",   status);
+            data.put("progress", progress);
+            data.put("message",  message);
+            data.put("filePath", filePath);
+
+            PluginResult result = new PluginResult(
+                    PluginResult.Status.OK, data);
+            result.setKeepCallback(keepCallback);
+            cb.sendPluginResult(result);
+        } catch (JSONException e) {
+            Log.e(TAG, "sendStatus error: " + e.getMessage());
         }
     }
 
