@@ -42,6 +42,8 @@ public class EnterpriseAppStore extends CordovaPlugin {
     private String pendingInstallUrl      = null;
     private String pendingInstallFileName = null;
     private CallbackContext pendingInstallCallback = null;
+    private File   pendingApkFile   = null;
+    private String pendingFilePath  = null;
 
 
     @Override
@@ -191,8 +193,9 @@ public class EnterpriseAppStore extends CordovaPlugin {
     // BROADCAST RECEIVER — Khi download xong → Install
     // ─────────────────────────────────────────────
 
+    
     private void registerDownloadReceiver(DownloadManager dm, File apkFile,
-                                      CallbackContext callbackContext) {
+                                        CallbackContext callbackContext) {
         Context context = cordova.getContext();
 
         downloadReceiver = new BroadcastReceiver() {
@@ -200,6 +203,10 @@ public class EnterpriseAppStore extends CordovaPlugin {
             public void onReceive(Context ctx, Intent intent) {
                 long id = intent.getLongExtra(
                         DownloadManager.EXTRA_DOWNLOAD_ID, -1);
+
+                Log.d(TAG, "onReceive downloadId=" + id
+                        + " | expected=" + downloadId);
+
                 if (id != downloadId) return;
 
                 // Dừng progress tracking
@@ -207,62 +214,74 @@ public class EnterpriseAppStore extends CordovaPlugin {
                     progressHandler.removeCallbacks(progressRunnable);
                 }
 
+                // Query download status
                 DownloadManager.Query query = new DownloadManager.Query();
                 query.setFilterById(downloadId);
                 Cursor cursor = dm.query(query);
 
-                if (cursor != null && cursor.moveToFirst()) {
-                    int status = cursor.getInt(cursor.getColumnIndexOrThrow(
-                            DownloadManager.COLUMN_STATUS));
-
-                    // ✅ Lấy filePath thực tế
-                    String localUri = cursor.getString(cursor.getColumnIndexOrThrow(
-                            DownloadManager.COLUMN_LOCAL_URI));
-                    cursor.close();
-
-                    if (status == DownloadManager.STATUS_SUCCESSFUL) {
-                        // Resolve filePath
-                        String filePath = apkFile.getAbsolutePath();
-                        try {
-                            if (localUri != null) {
-                                Uri uri = Uri.parse(localUri);
-                                if ("file".equals(uri.getScheme())) {
-                                    filePath = uri.getPath();
-                                }
-                            }
-                        } catch (Exception ignored) {}
-
-                        Log.d(TAG, "✅ Download complete: " + filePath);
-
-                        // ✅ Step 1: Thông báo download xong (keepCallback=true)
-                        sendProgressWithPath(callbackContext,
-                                "DOWNLOAD_COMPLETE", 100,
-                                "Download complete. Starting install...",
-                                filePath);
-
-                        // ✅ Step 2: Tiến hành install
-                        // (installApk sẽ gửi callback CUỐI với keepCallback=false)
-                        installApk(apkFile, filePath, callbackContext);
-
-                    } else {
-                        // ✅ Download thất bại → callback cuối
-                        try {
-                            JSONObject err = new JSONObject();
-                            err.put("status",   "ERROR");
-                            err.put("message",  "Download failed. Status: " + status);
-                            err.put("progress", 0);
-                            err.put("filePath", "");
-
-                            PluginResult pr = new PluginResult(
-                                    PluginResult.Status.ERROR, err);
-                            pr.setKeepCallback(false);
-                            callbackContext.sendPluginResult(pr);
-                        } catch (JSONException e) {
-                            callbackContext.error("DOWNLOAD_FAILED");
-                        }
-                    }
+                if (cursor == null || !cursor.moveToFirst()) {
+                    Log.e(TAG, "Cursor null or empty!");
+                    callbackContext.error("DOWNLOAD_ERROR: Cannot query status");
+                    return;
                 }
 
+                int status = cursor.getInt(cursor.getColumnIndexOrThrow(
+                        DownloadManager.COLUMN_STATUS));
+                String localUri = cursor.getString(cursor.getColumnIndexOrThrow(
+                        DownloadManager.COLUMN_LOCAL_URI));
+                int reason = cursor.getInt(cursor.getColumnIndexOrThrow(
+                        DownloadManager.COLUMN_REASON));
+                cursor.close();
+
+                Log.d(TAG, "Download status=" + status
+                        + " | localUri=" + localUri
+                        + " | reason=" + reason);
+
+                if (status == DownloadManager.STATUS_SUCCESSFUL) {
+
+                    // ── Resolve file thực tế ──────────────────────
+                    File realFile = resolveDownloadedFile(localUri, apkFile);
+
+                    Log.d(TAG, "realFile path     = " + realFile.getAbsolutePath());
+                    Log.d(TAG, "realFile exists() = " + realFile.exists());
+                    Log.d(TAG, "realFile size     = " + realFile.length() + " bytes");
+
+                    if (!realFile.exists()) {
+                        Log.e(TAG, "File NOT FOUND after download!");
+                        sendStatus(callbackContext, "ERROR", 0,
+                                "File not found after download: "
+                                + realFile.getAbsolutePath(), "", false);
+                        return;
+                    }
+
+                    String filePath = realFile.getAbsolutePath();
+
+                    // ── Gửi DOWNLOAD_COMPLETE ─────────────────────
+                    sendStatus(callbackContext, "DOWNLOAD_COMPLETE", 100,
+                            "Download complete. Starting install...",
+                            filePath, true); // keepCallback=true
+
+                    // ── Gọi installApk trên UI Thread ────────────
+                    // ✅ QUAN TRỌNG: startActivity() PHẢI chạy trên UI thread
+                    final File fileToInstall = realFile;
+                    final String finalPath   = filePath;
+
+                    cordova.getActivity().runOnUiThread(() -> {
+                        Log.d(TAG, "installApk() called on UI thread");
+                        installApk(fileToInstall, finalPath, callbackContext);
+                    });
+
+                } else {
+                    // Download thất bại
+                    String errMsg = getDownloadErrorReason(reason);
+                    Log.e(TAG, "Download FAILED: status=" + status
+                            + " reason=" + reason + " → " + errMsg);
+
+                    sendStatus(callbackContext, "ERROR", 0,
+                            "Download failed: " + errMsg, "", false);
+                }
+
+                // Unregister receiver
                 try { context.unregisterReceiver(this); }
                 catch (Exception ignored) {}
                 downloadId = -1;
@@ -281,82 +300,139 @@ public class EnterpriseAppStore extends CordovaPlugin {
 
 
     // ─────────────────────────────────────────────
+    // HELPER: Resolve đường dẫn file thực tế
+    // ─────────────────────────────────────────────
+    private File resolveDownloadedFile(String localUri, File fallbackFile) {
+        // Cách 1: Parse từ localUri của DownloadManager
+        if (localUri != null) {
+            try {
+                Uri uri = Uri.parse(localUri);
+                if ("file".equals(uri.getScheme())) {
+                    File f = new File(uri.getPath());
+                    if (f.exists()) {
+                        Log.d(TAG, "Resolved from localUri: " + f.getAbsolutePath());
+                        return f;
+                    }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Cannot parse localUri: " + e.getMessage());
+            }
+        }
+
+        // Cách 2: Dùng fallback file object
+        if (fallbackFile != null && fallbackFile.exists()) {
+            Log.d(TAG, "Using fallback file: " + fallbackFile.getAbsolutePath());
+            return fallbackFile;
+        }
+
+        // Cách 3: Tìm trong Public Downloads
+        File publicDownloads = Environment.getExternalStoragePublicDirectory(
+                Environment.DIRECTORY_DOWNLOADS);
+        if (fallbackFile != null) {
+            File inPublic = new File(publicDownloads, fallbackFile.getName());
+            if (inPublic.exists()) {
+                Log.d(TAG, "Found in public downloads: " + inPublic.getAbsolutePath());
+                return inPublic;
+            }
+        }
+
+        // Không tìm thấy → trả về fallback để xử lý lỗi
+        Log.e(TAG, "File not found anywhere!");
+        return fallbackFile != null ? fallbackFile : new File("");
+    }
+
+
+    // ─────────────────────────────────────────────
     // INSTALL APK — FileProvider cho Android 7+
     // ─────────────────────────────────────────────
     
-    
     private void installApk(File apkFile, String filePath,
-                            CallbackContext callbackContext) {
-        try {
-            Context context = cordova.getContext();
+                        CallbackContext callbackContext) {
+        // ✅ Double-check chạy trên UI thread
+        if (cordova.getActivity().isFinishing()) {
+            Log.e(TAG, "Activity is finishing, cannot install");
+            sendStatus(callbackContext, "ERROR", 0,
+                    "Activity is finishing", filePath, false);
+            return;
+        }
 
-            // ── Kiểm tra permission ──
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                if (!context.getPackageManager().canRequestPackageInstalls()) {
-                    try {
-                        JSONObject err = new JSONObject();
-                        err.put("status",   "ERROR");
-                        err.put("error",    "INSTALL_PERMISSION_REQUIRED");
-                        err.put("filePath", filePath);
-                        err.put("message",
-                            "Enable 'Install unknown apps' in Settings first.");
-                        err.put("progress", 0);
+        // ✅ Check file tồn tại lần cuối
+        if (apkFile == null || !apkFile.exists()) {
+            Log.e(TAG, "APK file not found: "
+                    + (apkFile != null ? apkFile.getAbsolutePath() : "null"));
+            sendStatus(callbackContext, "ERROR", 0,
+                    "APK file not found: " + filePath, filePath, false);
+            return;
+        }
 
-                        // ✅ keepCallback = false → đây là callback CUỐI
-                        PluginResult pr = new PluginResult(
-                                PluginResult.Status.ERROR, err);
-                        pr.setKeepCallback(false);
-                        callbackContext.sendPluginResult(pr);
-                    } catch (JSONException e) {
-                        callbackContext.error("INSTALL_PERMISSION_REQUIRED");
-                    }
-                    return;
-                }
+        Log.d(TAG, "installApk() file=" + apkFile.getAbsolutePath()
+                + " size=" + apkFile.length());
+
+        // ✅ Check permission (Android 8+)
+        Context context = cordova.getContext();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (!context.getPackageManager().canRequestPackageInstalls()) {
+                Log.w(TAG, "No INSTALL permission → requesting...");
+
+                // Lưu pending để resume sau
+                pendingInstallUrl      = null; // Không cần download lại
+                pendingInstallFileName = apkFile.getName();
+                pendingInstallCallback = callbackContext;
+                pendingApkFile         = apkFile; // ✅ Thêm field này
+                pendingFilePath        = filePath; // ✅ Thêm field này
+
+                Intent settingsIntent = new Intent(
+                        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:" + context.getPackageName()));
+                cordova.setActivityResultCallback(this);
+                cordova.getActivity().startActivityForResult(
+                        settingsIntent, REQUEST_INSTALL_PERMISSION);
+
+                sendStatus(callbackContext, "WAITING_PERMISSION", 100,
+                        "Please enable 'Install unknown apps' then return.",
+                        filePath, true);
+                return;
             }
+        }
 
-            // ── Build intent ──
+        // ✅ Tiến hành install
+        try {
             Intent intent = new Intent(Intent.ACTION_VIEW);
-            intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                        | Intent.FLAG_ACTIVITY_CLEAR_TOP);
 
             Uri apkUri;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                // Android 7+ → FileProvider
                 apkUri = FileProvider.getUriForFile(
                         context,
-                        context.getPackageName() + ".enterprise.appstore.provider",
+                        context.getPackageName()
+                                + ".enterprise.appstore.provider",
                         apkFile);
                 intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                Log.d(TAG, "Using FileProvider URI: " + apkUri);
             } else {
                 apkUri = Uri.fromFile(apkFile);
+                Log.d(TAG, "Using file URI: " + apkUri);
             }
 
             intent.setDataAndType(apkUri,
                     "application/vnd.android.package-archive");
+
+            Log.d(TAG, "Starting install activity...");
             context.startActivity(intent);
+            Log.d(TAG, "Install activity started ✅");
 
-            // ✅ Gửi INSTALL_PROMPT — keepCallback = false → callback CUỐI
-            try {
-                JSONObject result = new JSONObject();
-                result.put("status",   "INSTALL_PROMPT"); // ← JS sẽ $resolve() tại đây
-                result.put("message",  "Installation dialog opened");
-                result.put("progress", 100);
-                result.put("filePath", filePath);
-                result.put("fileUri",  apkUri.toString());
-
-                PluginResult pr = new PluginResult(
-                        PluginResult.Status.OK, result);
-                pr.setKeepCallback(false); // ✅ QUAN TRỌNG — Đánh dấu callback cuối
-                callbackContext.sendPluginResult(pr);
-
-            } catch (JSONException e) {
-                callbackContext.success(filePath);
-            }
+            // ✅ Gửi INSTALL_PROMPT — callback CUỐI (keepCallback=false)
+            sendStatus(callbackContext, "INSTALL_PROMPT", 100,
+                    "Installation dialog opened.", filePath, false);
 
         } catch (Exception e) {
-            Log.e(TAG, "Install error: " + e.getMessage());
-            callbackContext.error("INSTALL_ERROR: " + e.getMessage());
+            Log.e(TAG, "installApk ERROR: " + e.getMessage(), e);
+            sendStatus(callbackContext, "ERROR", 0,
+                    "Install error: " + e.getMessage(), filePath, false);
         }
     }
-
 
     
     private void sendProgressWithPath(CallbackContext cb, String status,
@@ -539,76 +615,77 @@ public class EnterpriseAppStore extends CordovaPlugin {
     //    Tự động resume download+install sau khi
     //    user bật permission và back về app
     // ─────────────────────────────────────────────
-    @Override
+   @Override
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
-        if (requestCode == REQUEST_INSTALL_PERMISSION) {
+        if (requestCode != REQUEST_INSTALL_PERMISSION) return;
 
-            Context context = cordova.getContext();
-            boolean hasPermission = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-                    && context.getPackageManager().canRequestPackageInstalls();
+        boolean hasPermission = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                && cordova.getContext().getPackageManager()
+                        .canRequestPackageInstalls();
 
-            Log.d(TAG, "onActivityResult: hasPermission = " + hasPermission);
+        Log.d(TAG, "onActivityResult: hasPermission=" + hasPermission);
 
-            if (pendingInstallCallback == null) return;
+        if (pendingInstallCallback == null) return;
 
-            if (hasPermission) {
-                //  User đã cấp permission
-                if (pendingInstallUrl != null && !pendingInstallUrl.isEmpty()) {
-                    //  Tự động resume download + install
-                    Log.d(TAG, "Permission granted → Resume download: "
-                            + pendingInstallFileName);
+        if (hasPermission) {
+            sendStatus(pendingInstallCallback, "PERMISSION_GRANTED", 0,
+                    "Permission granted. Resuming...", "", true);
 
-                    sendStatus(pendingInstallCallback,
-                            "PERMISSION_GRANTED", 0,
-                            "Permission granted. Starting download...",
-                            "", true);
+            if (pendingApkFile != null && pendingApkFile.exists()) {
+                // ✅ Case: Đã download rồi → install luôn
+                Log.d(TAG, "Resume install for: " + pendingApkFile.getName());
+                final File f  = pendingApkFile;
+                final String p = pendingFilePath;
+                cordova.getActivity().runOnUiThread(() ->
+                        installApk(f, p, pendingInstallCallback));
 
-                    downloadAndInstall(
-                            pendingInstallUrl,
-                            pendingInstallFileName,
-                            pendingInstallCallback);
-                } else {
-                    // Không có URL pending → chỉ báo permission OK
-                    try {
-                        JSONObject result = new JSONObject();
-                        result.put("status", "PERMISSION_GRANTED");
-                        result.put("hasPermission", true);
-                        result.put("message", "Permission granted successfully.");
-
-                        PluginResult pr = new PluginResult(
-                                PluginResult.Status.OK, result);
-                        pr.setKeepCallback(false);
-                        pendingInstallCallback.sendPluginResult(pr);
-                    } catch (JSONException e) {
-                        pendingInstallCallback.success("PERMISSION_GRANTED");
-                    }
-                }
-            } else {
-                //  User từ chối / không bật permission
-                try {
-                    JSONObject result = new JSONObject();
-                    result.put("status", "PERMISSION_DENIED");
-                    result.put("hasPermission", false);
-                    result.put("message",
-                            "Install permission denied. " +
-                            "Cannot install APK without this permission.");
-
-                    PluginResult pr = new PluginResult(
-                            PluginResult.Status.ERROR, result);
-                    pr.setKeepCallback(false);
-                    pendingInstallCallback.sendPluginResult(pr);
-                } catch (JSONException e) {
-                    pendingInstallCallback.error("PERMISSION_DENIED");
-                }
+            } else if (pendingInstallUrl != null
+                    && !pendingInstallUrl.isEmpty()) {
+                // ✅ Case: Chưa download → download + install
+                Log.d(TAG, "Resume download for: " + pendingInstallFileName);
+                downloadAndInstall(pendingInstallUrl,
+                        pendingInstallFileName, pendingInstallCallback);
             }
-
-            //  Reset pending state
-            pendingInstallUrl      = null;
-            pendingInstallFileName = null;
-            pendingInstallCallback = null;
+        } else {
+            // User từ chối
+            sendStatus(pendingInstallCallback, "PERMISSION_DENIED", 0,
+                    "Install permission denied.", "", false);
         }
+
+        // Reset tất cả pending state
+        pendingInstallUrl      = null;
+        pendingInstallFileName = null;
+        pendingInstallCallback = null;
+        pendingApkFile         = null;
+        pendingFilePath        = null;
     }
 
+    // ─────────────────────────────────────────────
+    // HELPER: Download error reason
+    // ─────────────────────────────────────────────
+    private String getDownloadErrorReason(int reason) {
+        switch (reason) {
+            case DownloadManager.ERROR_CANNOT_RESUME:
+                return "Cannot resume download";
+            case DownloadManager.ERROR_DEVICE_NOT_FOUND:
+                return "Storage device not found";
+            case DownloadManager.ERROR_FILE_ALREADY_EXISTS:
+                return "File already exists";
+            case DownloadManager.ERROR_FILE_ERROR:
+                return "File error";
+            case DownloadManager.ERROR_HTTP_DATA_ERROR:
+                return "HTTP data error";
+            case DownloadManager.ERROR_INSUFFICIENT_SPACE:
+                return "Insufficient storage space";
+            case DownloadManager.ERROR_TOO_MANY_REDIRECTS:
+                return "Too many redirects";
+            case DownloadManager.ERROR_UNHANDLED_HTTP_CODE:
+                return "Unhandled HTTP code";
+            case DownloadManager.ERROR_UNKNOWN:
+            default:
+                return "Unknown error (code: " + reason + ")";
+        }
+    }
     // ─────────────────────────────────────────────
     // HELPER: Gửi status callback
     // ─────────────────────────────────────────────
