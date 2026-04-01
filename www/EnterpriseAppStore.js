@@ -63,7 +63,29 @@ var EnterpriseAppStore = {
             'cancelDownload',
             []
         );
+    },
+    
+    checkInstallPermission: function(successCallback, errorCallback) {
+        exec(
+            successCallback,
+            errorCallback,
+            'EnterpriseAppStore',
+            'checkInstallPermission',
+            []
+        );
+    },
+    
+    requestInstallPermission: function(successCallback, errorCallback) {
+        exec(
+            successCallback,
+            errorCallback,
+            'EnterpriseAppStore',
+            'requestInstallPermission',
+            []
+        );
     }
+
+
 };
 
 module.exports = EnterpriseAppStore;
