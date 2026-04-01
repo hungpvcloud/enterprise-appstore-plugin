@@ -12,7 +12,12 @@ var EnterpriseAppStore = {
      * @param {function} progressCallback - Nhận nhiều lần: { status, progress, message }
      * @param {function} errorCallback    - Nhận 1 lần khi lỗi
      */
+    
     downloadAndInstall: function(url, fileName, progressCallback, errorCallback) {
+        // Tự động thêm .apk nếu thiếu
+        if (fileName && !fileName.toLowerCase().endsWith('.apk')) {
+            fileName = fileName + '.apk';
+        }
         exec(
             progressCallback,
             errorCallback,
@@ -21,6 +26,7 @@ var EnterpriseAppStore = {
             [url, fileName || 'app.apk']
         );
     },
+
 
     /**
      * Lấy version của app theo packageName
