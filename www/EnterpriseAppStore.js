@@ -3,95 +3,64 @@ var exec = require('cordova/exec');
 var EnterpriseAppStore = {
 
     /**
-     * Download và Install app
-     * Android : url = direct APK URL, fileName = "app.apk"
-     * iOS     : url = HTTPS URL đến manifest.plist, fileName = ignored
+     * Download và Install APK — Full flow tự động:
+     * 1. Check permission
+     * 2. Nếu chưa có → Mở Settings → Chờ user bật → Tự động resume
+     * 3. Download với progress
+     * 4. Install APK
      *
-     * @param {string}   url              - APK URL (Android) | manifest.plist URL (iOS)
-     * @param {string}   fileName         - Tên file APK (Android only)
-     * @param {function} progressCallback - Nhận nhiều lần: { status, progress, message }
-     * @param {function} errorCallback    - Nhận 1 lần khi lỗi
+     * Callback statuses:
+     *   WAITING_PERMISSION → Đang chờ user bật permission
+     *   PERMISSION_GRANTED → User đã bật, bắt đầu download
+     *   PERMISSION_DENIED  → User từ chối
+     *   DOWNLOADING        → Đang download (progress: 0-99)
+     *   DOWNLOAD_COMPLETE  → Download xong, bắt đầu install
+     *   INSTALL_PROMPT     → Dialog install đã mở ✅ (final)
+     *   ERROR              → Lỗi (final)
      */
-    
     downloadAndInstall: function(url, fileName, progressCallback, errorCallback) {
-        // Tự động thêm .apk nếu thiếu
         if (fileName && !fileName.toLowerCase().endsWith('.apk')) {
             fileName = fileName + '.apk';
         }
-        exec(
-            progressCallback,
-            errorCallback,
-            'EnterpriseAppStore',
-            'downloadAndInstall',
-            [url, fileName || 'app.apk']
-        );
-    },
-
-
-    /**
-     * Lấy version của app theo packageName
-     * Android: com.example.app
-     * iOS    : trả về version của app hiện tại
-     */
-    getAppVersion: function(packageName, successCallback, errorCallback) {
-        exec(
-            successCallback,
-            errorCallback,
-            'EnterpriseAppStore',
-            'getAppVersion',
-            [packageName]
-        );
+        exec(progressCallback, errorCallback,
+            'EnterpriseAppStore', 'downloadAndInstall',
+            [url, fileName || 'app.apk']);
     },
 
     /**
-     * Kiểm tra app đã được cài chưa
-     * Android: packageName (com.example.app)
-     * iOS    : URL scheme (myapp)
+     * Request permission + tự động resume download sau khi bật
+     * @param {string} url      - APK URL (để tự động resume)
+     * @param {string} fileName - Tên file APK
      */
-    isAppInstalled: function(packageName, successCallback, errorCallback) {
-        exec(
-            successCallback,
-            errorCallback,
-            'EnterpriseAppStore',
-            'isAppInstalled',
-            [packageName]
-        );
+    requestInstallPermission: function(url, fileName,
+                                       progressCallback, errorCallback) {
+        if (fileName && !fileName.toLowerCase().endsWith('.apk')) {
+            fileName = fileName + '.apk';
+        }
+        exec(progressCallback, errorCallback,
+            'EnterpriseAppStore', 'requestInstallPermission',
+            [url || '', fileName || '']);
     },
 
-    /**
-     * Hủy download đang chạy (Android only)
-     */
-    cancelDownload: function(successCallback, errorCallback) {
-        exec(
-            successCallback,
-            errorCallback,
-            'EnterpriseAppStore',
-            'cancelDownload',
-            []
-        );
-    },
-    
     checkInstallPermission: function(successCallback, errorCallback) {
-        exec(
-            successCallback,
-            errorCallback,
-            'EnterpriseAppStore',
-            'checkInstallPermission',
-            []
-        );
+        exec(successCallback, errorCallback,
+            'EnterpriseAppStore', 'checkInstallPermission', []);
     },
-    
-    requestInstallPermission: function(successCallback, errorCallback) {
-        exec(
-            successCallback,
-            errorCallback,
-            'EnterpriseAppStore',
-            'requestInstallPermission',
-            []
-        );
+
+    getAppVersion: function(packageName, successCallback, errorCallback) {
+        exec(successCallback, errorCallback,
+            'EnterpriseAppStore', 'getAppVersion', [packageName]);
+    },
+
+    isAppInstalled: function(packageName, successCallback, errorCallback) {
+        exec(successCallback, errorCallback,
+            'EnterpriseAppStore', 'isAppInstalled', [packageName]);
+    },
+
+    cancelDownload: function(successCallback, errorCallback) {
+        exec(successCallback, errorCallback,
+            'EnterpriseAppStore', 'cancelDownload', []);
     }
-
-
 };
 
 module.exports = EnterpriseAppStore;
