@@ -184,8 +184,9 @@ public class EnterpriseAppStore extends CordovaPlugin {
     // ─────────────────────────────────────────────
     // BROADCAST RECEIVER — Khi download xong → Install
     // ─────────────────────────────────────────────
+
     private void registerDownloadReceiver(DownloadManager dm, File apkFile,
-                                          CallbackContext callbackContext) {
+                                        CallbackContext callbackContext) {
         Context context = cordova.getContext();
 
         downloadReceiver = new BroadcastReceiver() {
@@ -195,12 +196,10 @@ public class EnterpriseAppStore extends CordovaPlugin {
                         DownloadManager.EXTRA_DOWNLOAD_ID, -1);
                 if (id != downloadId) return;
 
-                // Dừng progress tracking
                 if (progressHandler != null) {
                     progressHandler.removeCallbacks(progressRunnable);
                 }
 
-                // Kiểm tra download status
                 DownloadManager.Query query = new DownloadManager.Query();
                 query.setFilterById(downloadId);
                 Cursor cursor = dm.query(query);
@@ -209,12 +208,40 @@ public class EnterpriseAppStore extends CordovaPlugin {
                     int status = cursor.getInt(
                             cursor.getColumnIndexOrThrow(
                                     DownloadManager.COLUMN_STATUS));
+
+                    // ✅ Lấy đường dẫn thực tế từ DownloadManager
+                    String localUri = cursor.getString(
+                            cursor.getColumnIndexOrThrow(
+                                    DownloadManager.COLUMN_LOCAL_URI));
                     cursor.close();
 
                     if (status == DownloadManager.STATUS_SUCCESSFUL) {
-                        sendProgress(callbackContext, "INSTALLING", 100,
-                                "Download complete. Starting installation...");
-                        installApk(apkFile, callbackContext);
+                        // ✅ Convert URI → absolute path
+                        String filePath = "";
+                        try {
+                            if (localUri != null) {
+                                Uri uri = Uri.parse(localUri);
+                                if ("file".equals(uri.getScheme())) {
+                                    filePath = uri.getPath(); // /storage/emulated/0/Download/app.apk
+                                } else {
+                                    filePath = apkFile.getAbsolutePath();
+                                }
+                            } else {
+                                filePath = apkFile.getAbsolutePath();
+                            }
+                        } catch (Exception e) {
+                            filePath = apkFile.getAbsolutePath();
+                        }
+
+                        Log.d(TAG, "Download complete. File path: " + filePath);
+
+                        // ✅ Gửi progress kèm filePath
+                        sendProgressWithPath(callbackContext, "DOWNLOAD_COMPLETE",
+                                100, "Download complete. Starting installation...",
+                                filePath);
+
+                        // Install APK
+                        installApk(apkFile, filePath, callbackContext);
                     } else {
                         callbackContext.error("DOWNLOAD_FAILED_STATUS: " + status);
                     }
@@ -237,27 +264,33 @@ public class EnterpriseAppStore extends CordovaPlugin {
         }
     }
 
+
     // ─────────────────────────────────────────────
     // INSTALL APK — FileProvider cho Android 7+
     // ─────────────────────────────────────────────
-    private void installApk(File apkFile, CallbackContext callbackContext) {
+    
+    private void installApk(File apkFile, String filePath,
+                            CallbackContext callbackContext) {
         try {
             Context context = cordova.getContext();
-            
-            // ✅ KIỂM TRA permission trước khi install (Android 8+)
+
+            // Kiểm tra permission (Android 8+)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 if (!context.getPackageManager().canRequestPackageInstalls()) {
-                    // Chưa có permission → Yêu cầu user bật
-                    JSONObject error = new JSONObject();
-                    error.put("error", "INSTALL_PERMISSION_REQUIRED");
-                    error.put("message", 
-                        "App needs permission to install packages. " +
-                        "Call requestInstallPermission() first.");
-                    callbackContext.error(error.toString());
+                    try {
+                        JSONObject error = new JSONObject();
+                        error.put("error", "INSTALL_PERMISSION_REQUIRED");
+                        error.put("filePath", filePath); // ✅ Trả về path dù lỗi
+                        error.put("message",
+                                "Please enable 'Install unknown apps' permission.");
+                        callbackContext.error(error.toString());
+                    } catch (JSONException e) {
+                        callbackContext.error("INSTALL_PERMISSION_REQUIRED");
+                    }
                     return;
                 }
             }
-            
+
             Intent intent = new Intent(Intent.ACTION_VIEW);
             intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
 
@@ -276,22 +309,49 @@ public class EnterpriseAppStore extends CordovaPlugin {
                     "application/vnd.android.package-archive");
             context.startActivity(intent);
 
-            sendProgress(callbackContext, "INSTALL_PROMPT", 100,
-                    "Installation dialog opened");
+            // ✅ Gửi SUCCESS kèm filePath
+            try {
+                JSONObject result = new JSONObject();
+                result.put("status", "SUCCESS");
+                result.put("message", "APK installation started");
+                result.put("filePath", filePath);           // ✅ absolute path
+                result.put("fileUri", apkUri.toString());   // ✅ content URI
 
-            JSONObject result = new JSONObject();
-            result.put("status", "SUCCESS");
-            result.put("message", "APK installation started");
-            PluginResult pluginResult = new PluginResult(
-                    PluginResult.Status.OK, result);
-            pluginResult.setKeepCallback(false);
-            callbackContext.sendPluginResult(pluginResult);
+                PluginResult pluginResult = new PluginResult(
+                        PluginResult.Status.OK, result);
+                pluginResult.setKeepCallback(false);
+                callbackContext.sendPluginResult(pluginResult);
+            } catch (JSONException e) {
+                callbackContext.success(filePath);
+            }
 
         } catch (Exception e) {
             Log.e(TAG, "Install error: " + e.getMessage());
             callbackContext.error("INSTALL_ERROR: " + e.getMessage());
         }
     }
+
+    
+    private void sendProgressWithPath(CallbackContext cb, String status,
+                                    int percent, String message,
+                                    String filePath) {
+        try {
+            JSONObject data = new JSONObject();
+            data.put("status", status);
+            data.put("progress", percent);
+            data.put("message", message);
+            data.put("filePath", filePath); // ✅ Thêm filePath vào mọi callback
+
+            PluginResult result = new PluginResult(
+                    PluginResult.Status.OK, data);
+            result.setKeepCallback(true);
+            cb.sendPluginResult(result);
+        } catch (JSONException e) {
+            Log.e(TAG, "sendProgressWithPath error: " + e.getMessage());
+        }
+    }
+
+
 
     // ─────────────────────────────────────────────
     // GET APP VERSION
