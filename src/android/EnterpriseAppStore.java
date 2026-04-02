@@ -3,13 +3,17 @@ package com.enterprise.appstore;
 import android.app.DownloadManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.StatFs;
 import android.provider.Settings;
+import android.util.DisplayMetrics;
 import android.util.Log;
 
 import androidx.core.content.FileProvider;
@@ -21,17 +25,21 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.InputStreamReader;
+import java.util.Locale;
+import java.util.TimeZone;
 
 public class EnterpriseAppStore extends CordovaPlugin {
 
     // ════════════════════════════════════════════════════════
     // CONSTANTS & FIELDS
     // ════════════════════════════════════════════════════════
-    private static final String TAG                     = "EnterpriseAppStore";
-    private static final int    REQUEST_INSTALL_PERM    = 1001;
-    private static final int    POLL_INTERVAL_MS        = 800;
-    private static final int    MAX_POLL_COUNT          = 1500; // ~20 min timeout
+    private static final String TAG                  = "EnterpriseAppStore";
+    private static final int    REQUEST_INSTALL_PERM = 1001;
+    private static final int    POLL_INTERVAL_MS     = 800;
+    private static final int    MAX_POLL_COUNT       = 1500; // ~20 min
 
     // Download state
     private long            downloadId       = -1;
@@ -90,6 +98,19 @@ public class EnterpriseAppStore extends CordovaPlugin {
                 isAppInstalled(args.getString(0), callbackContext);
                 return true;
 
+            case "checkAppShield":
+                checkAppShield(callbackContext);
+                return true;
+
+            case "getDeviceInfo":
+                getDeviceInfo(callbackContext);
+                return true;
+
+            case "checkUpdate":
+                checkUpdate(args.getString(0), args.getString(1),
+                        callbackContext);
+                return true;
+
             case "cancelDownload":
                 cancelDownload(callbackContext);
                 return true;
@@ -99,8 +120,7 @@ public class EnterpriseAppStore extends CordovaPlugin {
 
     // ════════════════════════════════════════════════════════
     // DOWNLOAD AND INSTALL
-    // Uses POLLING instead of BroadcastReceiver
-    // — compatible with Xiaomi HyperOS
+    // Uses POLLING — compatible with Xiaomi HyperOS
     // ════════════════════════════════════════════════════════
     private void downloadAndInstall(String url, String fileName,
                                     CallbackContext callbackContext) {
@@ -119,7 +139,7 @@ public class EnterpriseAppStore extends CordovaPlugin {
                                 Environment.DIRECTORY_DOWNLOADS);
                 if (!downloadDir.exists()) downloadDir.mkdirs();
 
-                // Remove old file if exists
+                // Remove old APK if exists
                 File apkFile = new File(downloadDir, fileName);
                 if (apkFile.exists()) {
                     apkFile.delete();
@@ -162,7 +182,7 @@ public class EnterpriseAppStore extends CordovaPlugin {
 
     // ════════════════════════════════════════════════════════
     // POLLING — Query DownloadManager every 800ms
-    // Replaces BroadcastReceiver for Xiaomi HyperOS compatibility
+    // Replaces BroadcastReceiver for Xiaomi HyperOS
     // ════════════════════════════════════════════════════════
     private void startPolling(DownloadManager dm, File apkFile,
                               CallbackContext callbackContext) {
@@ -171,7 +191,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
         progressRunnable = new Runnable() {
             @Override
             public void run() {
-                // Stop if cancelled
                 if (downloadId == -1) {
                     Log.d(TAG, "Polling stopped: downloadId=-1");
                     return;
@@ -180,11 +199,9 @@ public class EnterpriseAppStore extends CordovaPlugin {
                 // Timeout check
                 pollCount++;
                 if (pollCount > MAX_POLL_COUNT) {
-                    Log.e(TAG, "Download TIMEOUT after "
-                            + pollCount + " polls");
+                    Log.e(TAG, "Download TIMEOUT after " + pollCount + " polls");
                     sendStatus(callbackContext, "ERROR", 0,
-                            "Download timeout after 20 minutes",
-                            "", false);
+                            "Download timeout after 20 minutes", "", false);
                     downloadId = -1;
                     return;
                 }
@@ -224,16 +241,13 @@ public class EnterpriseAppStore extends CordovaPlugin {
 
                     case DownloadManager.STATUS_RUNNING:
                     case DownloadManager.STATUS_PENDING: {
-                        // Still downloading — update progress
                         int progress = (total > 0)
-                                ? (int) ((downloaded * 100L) / total)
-                                : 0;
+                                ? (int) ((downloaded * 100L) / total) : 0;
                         String msg = (total > 0)
                                 ? "Downloading "
                                   + formatBytes(downloaded)
                                   + " / " + formatBytes(total)
                                 : "Downloading...";
-
                         sendStatus(callbackContext, "DOWNLOADING",
                                 progress, msg, "", true);
                         progressHandler.postDelayed(this, POLL_INTERVAL_MS);
@@ -241,34 +255,27 @@ public class EnterpriseAppStore extends CordovaPlugin {
                     }
 
                     case DownloadManager.STATUS_PAUSED: {
-                        // Paused (network issue, etc.)
                         sendStatus(callbackContext, "DOWNLOADING",
-                                0, "Download paused. Waiting...",
-                                "", true);
+                                0, "Download paused. Waiting...", "", true);
                         progressHandler.postDelayed(
                                 this, POLL_INTERVAL_MS * 2);
                         break;
                     }
 
                     case DownloadManager.STATUS_SUCCESSFUL: {
-                        // ✅ DOWNLOAD COMPLETE
                         Log.d(TAG, "=== DOWNLOAD SUCCESSFUL ===");
                         Log.d(TAG, "localUri = " + localUri);
 
-                        // Resolve actual file path
-                        File realFile = resolveDownloadedFile(
-                                localUri, apkFile);
+                        File realFile   = resolveDownloadedFile(localUri, apkFile);
                         String filePath = realFile.getAbsolutePath();
 
                         Log.d(TAG, "realFile = " + filePath);
                         Log.d(TAG, "exists   = " + realFile.exists());
-                        Log.d(TAG, "size     = "
-                                + realFile.length() + " bytes");
+                        Log.d(TAG, "size     = " + realFile.length() + " bytes");
 
                         // Stop polling
                         downloadId = -1;
 
-                        // Verify file
                         if (!realFile.exists() || realFile.length() == 0) {
                             Log.e(TAG, "File missing after download!");
                             sendStatus(callbackContext, "ERROR", 0,
@@ -277,25 +284,23 @@ public class EnterpriseAppStore extends CordovaPlugin {
                             return;
                         }
 
-                        // ✅ Send DOWNLOAD_COMPLETE with real filePath
+                        // Send DOWNLOAD_COMPLETE with real filePath
                         sendStatus(callbackContext,
                                 "DOWNLOAD_COMPLETE", 100,
                                 "Download complete. Starting installation...",
                                 filePath, true);
 
-                        // ✅ Run installApk on UI thread
+                        // Run installApk on UI thread
                         final File   finalFile = realFile;
                         final String finalPath = filePath;
                         cordova.getActivity().runOnUiThread(() -> {
-                            Log.d(TAG, "installApk() on UI thread: "
-                                    + finalPath);
+                            Log.d(TAG, "installApk() on UI thread: " + finalPath);
                             installApk(finalFile, finalPath, callbackContext);
                         });
                         break;
                     }
 
                     case DownloadManager.STATUS_FAILED: {
-                        // ❌ Download failed
                         String errMsg = getDownloadErrorReason(reason);
                         Log.e(TAG, "Download FAILED: " + errMsg
                                 + " (reason=" + reason + ")");
@@ -306,8 +311,7 @@ public class EnterpriseAppStore extends CordovaPlugin {
                     }
 
                     default:
-                        Log.w(TAG, "Unknown status=" + status
-                                + " — retrying...");
+                        Log.w(TAG, "Unknown status=" + status + " — retrying...");
                         progressHandler.postDelayed(this, POLL_INTERVAL_MS);
                         break;
                 }
@@ -390,7 +394,7 @@ public class EnterpriseAppStore extends CordovaPlugin {
                 pendingApkFile         = apkFile;
                 pendingFilePath        = filePath;
                 pendingInstallCallback = callbackContext;
-                pendingInstallUrl      = null; // Already downloaded
+                pendingInstallUrl      = null;
 
                 Intent settingsIntent = new Intent(
                         Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
@@ -415,7 +419,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
 
             Uri apkUri;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                // Android 7+ — use FileProvider
                 apkUri = FileProvider.getUriForFile(
                         context,
                         context.getPackageName()
@@ -435,7 +438,7 @@ public class EnterpriseAppStore extends CordovaPlugin {
             context.startActivity(intent);
             Log.d(TAG, "Install activity started ✅");
 
-            // ✅ Final callback — keepCallback=false → JS will $resolve()
+            // Final callback — keepCallback=false → JS will $resolve()
             sendStatus(callbackContext, "INSTALL_PROMPT", 100,
                     "Installation dialog opened.", filePath, false);
 
@@ -447,8 +450,7 @@ public class EnterpriseAppStore extends CordovaPlugin {
     }
 
     // ════════════════════════════════════════════════════════
-    // ON ACTIVITY RESULT
-    // Called when user returns from Settings
+    // ON ACTIVITY RESULT — Called when user returns from Settings
     // ════════════════════════════════════════════════════════
     @Override
     public void onActivityResult(int requestCode, int resultCode,
@@ -469,7 +471,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
         }
 
         if (hasPermission) {
-            // Permission granted
             sendStatus(pendingInstallCallback, "PERMISSION_GRANTED", 0,
                     "Permission granted. Resuming...", "", true);
 
@@ -484,14 +485,13 @@ public class EnterpriseAppStore extends CordovaPlugin {
 
             } else if (pendingInstallUrl != null
                     && !pendingInstallUrl.isEmpty()) {
-                // Not downloaded yet — start download
+                // Not downloaded yet — start download + install
                 Log.d(TAG, "Resume download: " + pendingInstallFileName);
                 downloadAndInstall(pendingInstallUrl,
                         pendingInstallFileName, pendingInstallCallback);
             }
 
         } else {
-            // Permission denied
             sendStatus(pendingInstallCallback, "PERMISSION_DENIED", 0,
                     "Install permission denied. "
                     + "Cannot install APK without this permission.",
@@ -533,7 +533,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
             Context context = cordova.getContext();
 
             if (!context.getPackageManager().canRequestPackageInstalls()) {
-                // Save pending state
                 pendingInstallUrl      = url;
                 pendingInstallFileName = fileName;
                 pendingInstallCallback = callbackContext;
@@ -551,9 +550,7 @@ public class EnterpriseAppStore extends CordovaPlugin {
                         + "then return to app.", "", true);
 
             } else {
-                // Already has permission
                 if (url != null && !url.isEmpty()) {
-                    // Has URL — start download directly
                     downloadAndInstall(url, fileName, callbackContext);
                 } else {
                     try {
@@ -567,7 +564,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
                 }
             }
         } else {
-            // Android < 8 — no permission needed
             if (url != null && !url.isEmpty()) {
                 downloadAndInstall(url, fileName, callbackContext);
             } else {
@@ -578,31 +574,393 @@ public class EnterpriseAppStore extends CordovaPlugin {
 
     // ════════════════════════════════════════════════════════
     // GET APP VERSION
+    // Returns: { packageName, versionName, versionCode }
+    // Error:   "APP_NOT_FOUND"
     // ════════════════════════════════════════════════════════
     private void getAppVersion(String packageName,
                                CallbackContext callbackContext) {
         try {
-            String version = cordova.getContext()
-                    .getPackageManager()
-                    .getPackageInfo(packageName, 0).versionName;
-            callbackContext.success(version);
-        } catch (Exception e) {
-            callbackContext.error("APP_NOT_FOUND: " + packageName);
+            android.content.pm.PackageInfo info =
+                    cordova.getContext()
+                            .getPackageManager()
+                            .getPackageInfo(packageName, 0);
+
+            JSONObject result = new JSONObject();
+            result.put("packageName",  packageName);
+            result.put("versionName",  info.versionName);
+            result.put("versionCode",
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                            ? info.getLongVersionCode()
+                            : info.versionCode);
+
+            Log.d(TAG, "getAppVersion: " + packageName
+                    + " v" + info.versionName);
+            callbackContext.success(result);
+
+        } catch (android.content.pm.PackageManager.NameNotFoundException e) {
+            Log.w(TAG, "getAppVersion: APP_NOT_FOUND " + packageName);
+            callbackContext.error("APP_NOT_FOUND");
+        } catch (JSONException e) {
+            callbackContext.error("ERROR: " + e.getMessage());
         }
     }
 
     // ════════════════════════════════════════════════════════
     // IS APP INSTALLED
+    // Returns: { isInstalled, packageName, versionName, versionCode }
     // ════════════════════════════════════════════════════════
     private void isAppInstalled(String packageName,
                                 CallbackContext callbackContext) {
         try {
-            cordova.getContext().getPackageManager()
-                    .getPackageInfo(packageName, 0);
-            callbackContext.success(1); // installed
-        } catch (Exception e) {
-            callbackContext.success(0); // not installed
+            JSONObject result = new JSONObject();
+            try {
+                android.content.pm.PackageInfo info =
+                        cordova.getContext()
+                                .getPackageManager()
+                                .getPackageInfo(packageName, 0);
+
+                result.put("isInstalled",  true);
+                result.put("packageName",  packageName);
+                result.put("versionName",  info.versionName);
+                result.put("versionCode",
+                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                                ? info.getLongVersionCode()
+                                : info.versionCode);
+
+                Log.d(TAG, "isAppInstalled: " + packageName + " = TRUE"
+                        + " v" + info.versionName);
+
+            } catch (android.content.pm.PackageManager.NameNotFoundException e) {
+                result.put("isInstalled",  false);
+                result.put("packageName",  packageName);
+                result.put("versionName",  "");
+                result.put("versionCode",  0);
+                Log.d(TAG, "isAppInstalled: " + packageName + " = FALSE");
+            }
+
+            callbackContext.success(result);
+
+        } catch (JSONException e) {
+            callbackContext.error("ERROR: " + e.getMessage());
         }
+    }
+
+    // ════════════════════════════════════════════════════════
+    // CHECK APP SHIELD
+    // Returns: {
+    //   isRooted, isDeveloperMode, isUsbDebugging,
+    //   isEmulator, isInstalledFromStore, isSafe
+    // }
+    // ════════════════════════════════════════════════════════
+    private void checkAppShield(CallbackContext callbackContext) {
+        cordova.getThreadPool().execute(() -> {
+            try {
+                JSONObject result = new JSONObject();
+
+                // Check 1: Rooted
+                boolean isRooted = checkIsRooted();
+                result.put("isRooted", isRooted);
+
+                // Check 2: Developer Mode
+                boolean isDeveloperMode = Settings.Global.getInt(
+                        cordova.getContext().getContentResolver(),
+                        Settings.Global.DEVELOPMENT_SETTINGS_ENABLED,
+                        0) == 1;
+                result.put("isDeveloperMode", isDeveloperMode);
+
+                // Check 3: USB Debugging
+                boolean isUsbDebugging = Settings.Global.getInt(
+                        cordova.getContext().getContentResolver(),
+                        Settings.Global.ADB_ENABLED,
+                        0) == 1;
+                result.put("isUsbDebugging", isUsbDebugging);
+
+                // Check 4: Emulator
+                boolean isEmulator = checkIsEmulator();
+                result.put("isEmulator", isEmulator);
+
+                // Check 5: Installed from Store
+                boolean isFromStore = checkInstalledFromStore();
+                result.put("isInstalledFromStore", isFromStore);
+
+                // Overall safety — blocking: rooted or emulator
+                boolean isSafe = !isRooted && !isEmulator;
+                result.put("isSafe", isSafe);
+
+                Log.d(TAG, "checkAppShield:"
+                        + " rooted="    + isRooted
+                        + " devMode="   + isDeveloperMode
+                        + " usbDebug="  + isUsbDebugging
+                        + " emulator="  + isEmulator
+                        + " fromStore=" + isFromStore
+                        + " safe="      + isSafe);
+
+                callbackContext.success(result);
+
+            } catch (Exception e) {
+                Log.e(TAG, "checkAppShield error: " + e.getMessage(), e);
+                callbackContext.error("SHIELD_CHECK_ERROR: " + e.getMessage());
+            }
+        });
+    }
+
+    // ── Helper: Check Rooted ─────────────────────────────────
+    private boolean checkIsRooted() {
+        // Check 1: Build tags
+        String buildTags = Build.TAGS;
+        if (buildTags != null && buildTags.contains("test-keys")) {
+            Log.d(TAG, "Root detected: test-keys");
+            return true;
+        }
+
+        // Check 2: Su binary paths
+        String[] suPaths = {
+            "/system/app/Superuser.apk",
+            "/sbin/su", "/system/bin/su",
+            "/system/xbin/su", "/data/local/xbin/su",
+            "/data/local/bin/su", "/system/sd/xbin/su",
+            "/system/bin/failsafe/su", "/data/local/su",
+            "/su/bin/su"
+        };
+        for (String path : suPaths) {
+            if (new File(path).exists()) {
+                Log.d(TAG, "Root detected: su found at " + path);
+                return true;
+            }
+        }
+
+        // Check 3: Try execute su
+        try {
+            Process process = Runtime.getRuntime().exec("su");
+            process.destroy();
+            Log.d(TAG, "Root detected: su executable");
+            return true;
+        } catch (Exception ignored) {}
+
+        // Check 4: which su
+        try {
+            Process process = Runtime.getRuntime()
+                    .exec(new String[]{"/system/xbin/which", "su"});
+            BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(process.getInputStream()));
+            if (reader.readLine() != null) {
+                Log.d(TAG, "Root detected: which su returned result");
+                return true;
+            }
+        } catch (Exception ignored) {}
+
+        return false;
+    }
+
+    // ── Helper: Check Emulator ───────────────────────────────
+    private boolean checkIsEmulator() {
+        return Build.FINGERPRINT.startsWith("generic")
+                || Build.FINGERPRINT.startsWith("unknown")
+                || Build.MODEL.contains("google_sdk")
+                || Build.MODEL.contains("Emulator")
+                || Build.MODEL.contains("Android SDK built for x86")
+                || Build.MANUFACTURER.contains("Genymotion")
+                || (Build.BRAND.startsWith("generic")
+                    && Build.DEVICE.startsWith("generic"))
+                || "google_sdk".equals(Build.PRODUCT)
+                || Build.HARDWARE.equals("goldfish")
+                || Build.HARDWARE.equals("ranchu");
+    }
+
+    // ── Helper: Check Installed From Store ───────────────────
+    private boolean checkInstalledFromStore() {
+        try {
+            Context context = cordova.getContext();
+            String installer;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                installer = context.getPackageManager()
+                        .getInstallSourceInfo(context.getPackageName())
+                        .getInstallingPackageName();
+            } else {
+                installer = context.getPackageManager()
+                        .getInstallerPackageName(context.getPackageName());
+            }
+            return installer != null && (
+                    installer.equals("com.android.vending")
+                    || installer.equals("com.google.android.feedback")
+                    || installer.equals("com.huawei.appmarket")
+                    || installer.equals("com.xiaomi.market")
+                    || installer.equals("com.oppo.market"));
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    // ════════════════════════════════════════════════════════
+    // GET DEVICE INFO
+    // Returns full device information
+    // ════════════════════════════════════════════════════════
+    private void getDeviceInfo(CallbackContext callbackContext) {
+        cordova.getThreadPool().execute(() -> {
+            try {
+                Context context = cordova.getContext();
+                JSONObject result = new JSONObject();
+
+                // Hardware info
+                result.put("manufacturer",   Build.MANUFACTURER);
+                result.put("brand",          Build.BRAND);
+                result.put("model",          Build.MODEL);
+                result.put("device",         Build.DEVICE);
+                result.put("product",        Build.PRODUCT);
+
+                // OS info
+                result.put("androidVersion", Build.VERSION.RELEASE);
+                result.put("sdkVersion",     Build.VERSION.SDK_INT);
+
+                // App info
+                try {
+                    android.content.pm.PackageInfo pkgInfo =
+                            context.getPackageManager()
+                                    .getPackageInfo(context.getPackageName(), 0);
+                    result.put("appVersion",     pkgInfo.versionName);
+                    result.put("packageName",    context.getPackageName());
+                    result.put("appVersionCode",
+                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                                    ? pkgInfo.getLongVersionCode()
+                                    : pkgInfo.versionCode);
+                } catch (Exception e) {
+                    result.put("appVersion",  "Unknown");
+                    result.put("packageName", context.getPackageName());
+                }
+
+                // Screen info
+                DisplayMetrics dm =
+                        context.getResources().getDisplayMetrics();
+                result.put("screenWidth",    dm.widthPixels);
+                result.put("screenHeight",   dm.heightPixels);
+                result.put("screenDensity",  dm.densityDpi);
+
+                // Locale & Timezone
+                result.put("locale",   Locale.getDefault().toString());
+                result.put("timezone", TimeZone.getDefault().getID());
+
+                // Battery
+                IntentFilter ifilter = new IntentFilter(
+                        Intent.ACTION_BATTERY_CHANGED);
+                Intent batteryStatus =
+                        context.registerReceiver(null, ifilter);
+                if (batteryStatus != null) {
+                    int level  = batteryStatus.getIntExtra(
+                            BatteryManager.EXTRA_LEVEL, -1);
+                    int scale  = batteryStatus.getIntExtra(
+                            BatteryManager.EXTRA_SCALE, -1);
+                    int bStatus = batteryStatus.getIntExtra(
+                            BatteryManager.EXTRA_STATUS, -1);
+                    int batteryPct = (scale > 0)
+                            ? (int)((level / (float) scale) * 100) : -1;
+                    boolean isCharging =
+                            bStatus == BatteryManager.BATTERY_STATUS_CHARGING
+                            || bStatus == BatteryManager.BATTERY_STATUS_FULL;
+                    result.put("batteryLevel", batteryPct);
+                    result.put("isCharging",   isCharging);
+                } else {
+                    result.put("batteryLevel", -1);
+                    result.put("isCharging",   false);
+                }
+
+                // Storage
+                StatFs stat = new StatFs(
+                        Environment.getExternalStorageDirectory().getPath());
+                long blockSize    = stat.getBlockSizeLong();
+                long availBlocks  = stat.getAvailableBlocksLong();
+                long totalBlocks  = stat.getBlockCountLong();
+                result.put("availableStorageMB",
+                        (availBlocks * blockSize) / (1024 * 1024));
+                result.put("totalStorageMB",
+                        (totalBlocks * blockSize) / (1024 * 1024));
+
+                Log.d(TAG, "getDeviceInfo: "
+                        + Build.MANUFACTURER + " " + Build.MODEL
+                        + " Android " + Build.VERSION.RELEASE);
+
+                callbackContext.success(result);
+
+            } catch (Exception e) {
+                Log.e(TAG, "getDeviceInfo error: " + e.getMessage(), e);
+                callbackContext.error("DEVICE_INFO_ERROR: " + e.getMessage());
+            }
+        });
+    }
+
+    // ════════════════════════════════════════════════════════
+    // CHECK UPDATE
+    // Compare installed version vs latest version from server
+    // Returns: { needsUpdate, installedVersion, latestVersion,
+    //            packageName, isInstalled }
+    // ════════════════════════════════════════════════════════
+    private void checkUpdate(String packageName, String latestVersion,
+                             CallbackContext callbackContext) {
+        try {
+            JSONObject result = new JSONObject();
+            result.put("packageName",   packageName);
+            result.put("latestVersion", latestVersion);
+
+            try {
+                android.content.pm.PackageInfo info =
+                        cordova.getContext()
+                                .getPackageManager()
+                                .getPackageInfo(packageName, 0);
+
+                String installedVersion = info.versionName;
+                boolean needsUpdate     = compareVersions(
+                        installedVersion, latestVersion) < 0;
+
+                result.put("isInstalled",      true);
+                result.put("installedVersion", installedVersion);
+                result.put("needsUpdate",      needsUpdate);
+
+                Log.d(TAG, "checkUpdate: " + packageName
+                        + " installed=" + installedVersion
+                        + " latest="    + latestVersion
+                        + " needsUpdate=" + needsUpdate);
+
+            } catch (android.content.pm.PackageManager.NameNotFoundException e) {
+                // App not installed — needs install
+                result.put("isInstalled",      false);
+                result.put("installedVersion", "");
+                result.put("needsUpdate",      true);
+                Log.d(TAG, "checkUpdate: " + packageName + " not installed");
+            }
+
+            callbackContext.success(result);
+
+        } catch (JSONException e) {
+            callbackContext.error("CHECK_UPDATE_ERROR: " + e.getMessage());
+        }
+    }
+
+    // ── Helper: Compare semantic versions ────────────────────
+    // Returns: -1 (v1 < v2), 0 (equal), 1 (v1 > v2)
+    private int compareVersions(String v1, String v2) {
+        if (v1 == null) v1 = "0";
+        if (v2 == null) v2 = "0";
+
+        // Remove non-numeric prefix e.g. "v1.2.3" → "1.2.3"
+        v1 = v1.replaceAll("[^0-9.]", "");
+        v2 = v2.replaceAll("[^0-9.]", "");
+
+        String[] parts1 = v1.split("\.");
+        String[] parts2 = v2.split("\.");
+        int maxLen = Math.max(parts1.length, parts2.length);
+
+        for (int i = 0; i < maxLen; i++) {
+            int p1 = 0, p2 = 0;
+            try { p1 = i < parts1.length
+                    ? Integer.parseInt(parts1[i]) : 0; }
+            catch (NumberFormatException ignored) {}
+            try { p2 = i < parts2.length
+                    ? Integer.parseInt(parts2[i]) : 0; }
+            catch (NumberFormatException ignored) {}
+
+            if (p1 < p2) return -1;
+            if (p1 > p2) return  1;
+        }
+        return 0;
     }
 
     // ════════════════════════════════════════════════════════
@@ -656,7 +1014,7 @@ public class EnterpriseAppStore extends CordovaPlugin {
     }
 
     // ════════════════════════════════════════════════════════
-    // HELPER: Format bytes to human readable
+    // HELPER: Format bytes
     // ════════════════════════════════════════════════════════
     private String formatBytes(long bytes) {
         if (bytes <= 0)          return "0 B";
@@ -666,7 +1024,7 @@ public class EnterpriseAppStore extends CordovaPlugin {
     }
 
     // ════════════════════════════════════════════════════════
-    // HELPER: Download error reason
+    // HELPER: Download error reason text
     // ════════════════════════════════════════════════════════
     private String getDownloadErrorReason(int reason) {
         switch (reason) {
