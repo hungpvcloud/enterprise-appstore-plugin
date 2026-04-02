@@ -944,8 +944,8 @@ public class EnterpriseAppStore extends CordovaPlugin {
         v1 = v1.replaceAll("[^0-9.]", "");
         v2 = v2.replaceAll("[^0-9.]", "");
 
-        String[] parts1 = v1.split("\.");
-        String[] parts2 = v2.split("\.");
+        String[] parts1 = v1.split("\\.");
+        String[] parts2 = v2.split("\\.");
         int maxLen = Math.max(parts1.length, parts2.length);
 
         for (int i = 0; i < maxLen; i++) {
