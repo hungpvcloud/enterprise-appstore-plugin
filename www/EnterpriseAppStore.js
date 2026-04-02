@@ -2,22 +2,10 @@ var exec = require('cordova/exec');
 
 var EnterpriseAppStore = {
 
-    /**
-     * Download và Install APK — Full flow tự động:
-     * 1. Check permission
-     * 2. Nếu chưa có → Mở Settings → Chờ user bật → Tự động resume
-     * 3. Download với progress
-     * 4. Install APK
-     *
-     * Callback statuses:
-     *   WAITING_PERMISSION → Đang chờ user bật permission
-     *   PERMISSION_GRANTED → User đã bật, bắt đầu download
-     *   PERMISSION_DENIED  → User từ chối
-     *   DOWNLOADING        → Đang download (progress: 0-99)
-     *   DOWNLOAD_COMPLETE  → Download xong, bắt đầu install
-     *   INSTALL_PROMPT     → Dialog install đã mở ✅ (final)
-     *   ERROR              → Lỗi (final)
-     */
+    // ────────────────────────────────────────────────────────
+    // 1. DOWNLOAD AND INSTALL
+    // status: DOWNLOADING → DOWNLOAD_COMPLETE → INSTALL_PROMPT
+    // ────────────────────────────────────────────────────────
     downloadAndInstall: function(url, fileName, progressCallback, errorCallback) {
         if (fileName && !fileName.toLowerCase().endsWith('.apk')) {
             fileName = fileName + '.apk';
@@ -27,11 +15,18 @@ var EnterpriseAppStore = {
             [url, fileName || 'app.apk']);
     },
 
-    /**
-     * Request permission + tự động resume download sau khi bật
-     * @param {string} url      - APK URL (để tự động resume)
-     * @param {string} fileName - Tên file APK
-     */
+    // ────────────────────────────────────────────────────────
+    // 2. CHECK INSTALL PERMISSION
+    // Returns: { hasPermission: bool }
+    // ────────────────────────────────────────────────────────
+    checkInstallPermission: function(successCallback, errorCallback) {
+        exec(successCallback, errorCallback,
+            'EnterpriseAppStore', 'checkInstallPermission', []);
+    },
+
+    // ────────────────────────────────────────────────────────
+    // 3. REQUEST INSTALL PERMISSION (+ auto resume download)
+    // ────────────────────────────────────────────────────────
     requestInstallPermission: function(url, fileName,
                                        progressCallback, errorCallback) {
         if (fileName && !fileName.toLowerCase().endsWith('.apk')) {
@@ -42,21 +37,63 @@ var EnterpriseAppStore = {
             [url || '', fileName || '']);
     },
 
-    checkInstallPermission: function(successCallback, errorCallback) {
-        exec(successCallback, errorCallback,
-            'EnterpriseAppStore', 'checkInstallPermission', []);
-    },
-
+    // ────────────────────────────────────────────────────────
+    // 4. GET APP VERSION
+    // Returns: { packageName, versionName, versionCode }
+    // Error:   "APP_NOT_FOUND"
+    // ────────────────────────────────────────────────────────
     getAppVersion: function(packageName, successCallback, errorCallback) {
         exec(successCallback, errorCallback,
             'EnterpriseAppStore', 'getAppVersion', [packageName]);
     },
 
+    // ────────────────────────────────────────────────────────
+    // 5. IS APP INSTALLED
+    // Returns: { isInstalled, packageName, versionName, versionCode }
+    // ────────────────────────────────────────────────────────
     isAppInstalled: function(packageName, successCallback, errorCallback) {
         exec(successCallback, errorCallback,
             'EnterpriseAppStore', 'isAppInstalled', [packageName]);
     },
 
+    // ────────────────────────────────────────────────────────
+    // 6. CHECK APP SHIELD
+    // Returns: {
+    //   isRooted, isDeveloperMode, isUsbDebugging,
+    //   isEmulator, isInstalledFromStore, isSafe
+    // }
+    // ────────────────────────────────────────────────────────
+    checkAppShield: function(successCallback, errorCallback) {
+        exec(successCallback, errorCallback,
+            'EnterpriseAppStore', 'checkAppShield', []);
+    },
+
+    // ────────────────────────────────────────────────────────
+    // 7. GET DEVICE INFO
+    // Returns full device information object
+    // ────────────────────────────────────────────────────────
+    getDeviceInfo: function(successCallback, errorCallback) {
+        exec(successCallback, errorCallback,
+            'EnterpriseAppStore', 'getDeviceInfo', []);
+    },
+
+    // ────────────────────────────────────────────────────────
+    // 8. CHECK UPDATE
+    // packageName: com.example.app
+    // latestVersion: "2.0.0" (from your server API)
+    // Returns: { needsUpdate, installedVersion, latestVersion,
+    //            packageName, isInstalled }
+    // ────────────────────────────────────────────────────────
+    checkUpdate: function(packageName, latestVersion,
+                          successCallback, errorCallback) {
+        exec(successCallback, errorCallback,
+            'EnterpriseAppStore', 'checkUpdate',
+            [packageName, latestVersion]);
+    },
+
+    // ────────────────────────────────────────────────────────
+    // 9. CANCEL DOWNLOAD
+    // ────────────────────────────────────────────────────────
     cancelDownload: function(successCallback, errorCallback) {
         exec(successCallback, errorCallback,
             'EnterpriseAppStore', 'cancelDownload', []);
