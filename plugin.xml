@@ -82,23 +82,53 @@
     <!-- ============================================================
          iOS
     ============================================================ -->
-    <platform name="ios">
+    
+<platform name="ios">
 
-        <!-- Cordova feature registration -->
+        <!-- ✅ 1. Cordova feature registration -->
         <config-file target="config.xml" parent="/*">
             <feature name="EnterpriseAppStore">
                 <param name="ios-package" value="EnterpriseAppStore" />
             </feature>
         </config-file>
 
-        <!-- UIKit framework -->
+        <!-- 2. LSApplicationQueriesSchemes
+              URLs scheme need to check in isAppInstalled()-->
+        <config-file target="*-Info.plist"
+                     parent="LSApplicationQueriesSchemes">
+            <array>
+                <string>cydia</string>
+            </array>
+        </config-file>
+
+        <!-- 3. NSAppTransportSecurity
+             Allow HTTPS to manifest.plist server -->
+        <config-file target="*-Info.plist"
+                     parent="NSAppTransportSecurity">
+            <dict>
+                <key>NSAllowsArbitraryLoads</key>
+                <false/>
+                <key>NSExceptionDomains</key>
+                <dict>
+                    <!-- add domain -->
+                    <key>your-server.com</key>
+                    <dict>
+                        <key>NSIncludesSubdomains</key>
+                        <true/>
+                        <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                        <false/>
+                    </dict>
+                </dict>
+            </dict>
+        </config-file>
+
+        <!-- 4. UIKit framework -->
         <framework src="UIKit.framework" weak="false" />
 
-        <!-- Swift source file -->
+        <!-- 5. Swift source file -->
         <source-file src="src/ios/EnterpriseAppStore.swift" />
 
-        <!-- NOTE: cordova-plugin-add-swift-support is NOT needed for MABS 10+ -->
-
     </platform>
+
 
 </plugin>
