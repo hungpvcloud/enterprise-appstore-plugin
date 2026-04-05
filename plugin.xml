@@ -85,7 +85,7 @@
     
 <platform name="ios">
 
-        <!-- ✅ 1. Cordova feature registration -->
+        <!-- 1. Cordova feature registration -->
         <config-file target="config.xml" parent="/*">
             <feature name="EnterpriseAppStore">
                 <param name="ios-package" value="EnterpriseAppStore" />
@@ -111,7 +111,7 @@
                 <key>NSExceptionDomains</key>
                 <dict>
                     <!-- add domain -->
-                    <key>your-server.com</key>
+                    <key>https://hscl-dev.outsystemscloud.com</key>
                     <dict>
                         <key>NSIncludesSubdomains</key>
                         <true/>
