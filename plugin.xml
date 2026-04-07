@@ -102,36 +102,20 @@
                 Required for isAppInstalled() on iOS 9+.
                 Add URL scheme of each app you want to check.
                 "cydia" is used for jailbreak detection in checkAppShield(). -->
-        <config-file target="*-Info.plist"
+        <!-- <config-file target="*-Info.plist"
                      parent="LSApplicationQueriesSchemes">
             <array>
                 <string>EnterpriseAppStore_2</string>
                 <string>New IOS App</string>
-                <!-- Add more URL schemes here as needed -->
-                <!-- <string>hrconnect</string> -->
-                <!-- <string>timekeeping</string> -->
             </array>
-        </config-file>
+        </config-file> -->
 
-        <!-- 3. App Transport Security — enforce HTTPS for OTA installation.
-                NSExceptionDomains key must be the domain name ONLY,
-                without "https://" prefix. -->
-        <config-file target="*-Info.plist"
-                     parent="NSAppTransportSecurity">
-            <dict>
-                <key>NSAllowsArbitraryLoads</key>
-                <false/>
-                <key>NSExceptionDomains</key>
-                <dict>
-                    <key>hscl-dev.outsystemscloud.com</key>
-                    <dict>
-                        <key>NSIncludesSubdomains</key>
-                        <true/>
-                        <key>NSExceptionAllowsInsecureHTTPLoads</key>
-                        <false/>
-                    </dict>
-                </dict>
-            </dict>
+
+        <config-file target="*-Info.plist" parent="LSApplicationQueriesSchemes">
+            <array>
+                <string>cydia</string> 
+                <string>EnterpriseAppStore_2</string>
+                <string>New IOS App</string> </array>
         </config-file>
 
         <!-- 4. UIKit framework — required for UIDevice, UIScreen, UIApplication -->
