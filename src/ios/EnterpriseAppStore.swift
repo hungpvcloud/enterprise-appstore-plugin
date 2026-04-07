@@ -26,11 +26,12 @@ class EnterpriseAppStore: CDVPlugin {
 
         print("[EnterpriseAppStore] manifestUrl = \(manifestUrl)")
 
-        var allowedCharacters = CharacterSet.urlQueryAllowed
-        allowedCharacters.remove(charactersIn: "!*'();:@&=+$,/?%#[]")
-
+        // Percent-encode the manifest URL before embedding it as a query parameter.
+        // This is required because the manifest URL may contain its own query params
+        // (e.g. ?IPAUrl=...&BundleId=...) which must be encoded to avoid breaking
+        // the outer itms-services URL structure.
         guard let encodedManifestUrl = manifestUrl
-            .addingPercentEncoding(withAllowedCharacters: allowedCharacters) else {
+            .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
             sendStatus(callbackId: command.callbackId,
                        status: "ERROR",
                        progress: 0,
@@ -39,21 +40,6 @@ class EnterpriseAppStore: CDVPlugin {
                        keepCallback: false)
             return
         }
-
-        // Percent-encode the manifest URL before embedding it as a query parameter.
-        // This is required because the manifest URL may contain its own query params
-        // (e.g. ?IPAUrl=...&BundleId=...) which must be encoded to avoid breaking
-        // the outer itms-services URL structure.
-        // guard let encodedManifestUrl = manifestUrl
-        //     .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
-        //     sendStatus(callbackId: command.callbackId,
-        //                status: "ERROR",
-        //                progress: 0,
-        //                message: "URL_ENCODING_FAILED",
-        //                filePath: "",
-        //                keepCallback: false)
-        //     return
-        // }
 
         // Build the itms-services URL using "&" (not "&amp;") as the query separator
         let itsUrlString = "itms-services://?action=download-manifest&url=\(encodedManifestUrl)"
