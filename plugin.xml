@@ -1,23 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <plugin
     id="enterprise-appstore-plugin"
-    version="1.0.0"
+    version="1.2.4"
     xmlns="http://apache.org/cordova/ns/plugins/1.0"
     xmlns:android="http://schemas.android.com/apk/res/android">
 
     <name>EnterpriseAppStore</name>
-    <description>Enterprise App Store Plugin - Download and Install Apps</description>
+    <description>Enterprise App Store Plugin - Download and Install Apps (Android + iOS)</description>
     <license>MIT</license>
     <keywords>cordova, outsystems, enterprise, appstore, download, install</keywords>
 
-    <!-- Engine requirements -->
+    <!-- Minimum engine requirements -->
     <engines>
         <engine name="cordova"         version=">=10.0.0" />
         <engine name="cordova-android" version=">=10.0.0" />
         <engine name="cordova-ios"     version=">=6.0.0"  />
     </engines>
 
-    <!-- JavaScript Bridge -->
+    <!-- JavaScript bridge — exposes window.EnterpriseAppStore to the WebView -->
     <js-module src="www/EnterpriseAppStore.js" name="EnterpriseAppStore">
         <clobbers target="window.EnterpriseAppStore" />
     </js-module>
@@ -27,25 +27,30 @@
     ============================================================ -->
     <platform name="android">
 
-        <!-- AndroidX dependencies -->
+        <!-- AndroidX dependencies required for FileProvider and DownloadManager -->
         <framework src="androidx.core:core:1.9.0" />
         <framework src="androidx.appcompat:appcompat:1.6.1" />
 
-        <!-- Permissions -->
+        <!-- Required permissions -->
         <config-file target="AndroidManifest.xml" parent="/*">
+            <!-- Network access for downloading APK files -->
             <uses-permission android:name="android.permission.INTERNET" />
+            <!-- Required to install APK files programmatically -->
             <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+            <!-- Required on Android 11+ to query other installed packages -->
             <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
-
+            <!-- External storage write access (Android 9 and below only) -->
             <uses-permission
                 android:name="android.permission.WRITE_EXTERNAL_STORAGE"
                 android:maxSdkVersion="28" />
+            <!-- External storage read access (Android 12 and below only) -->
             <uses-permission
                 android:name="android.permission.READ_EXTERNAL_STORAGE"
                 android:maxSdkVersion="32" />
         </config-file>
 
-        <!-- FileProvider registration (NO <receiver> - using inline registerReceiver) -->
+        <!-- Register custom FileProvider to serve APK files via content:// URI.
+             Uses a dedicated subclass to avoid authority conflicts with other plugins. -->
         <config-file target="AndroidManifest.xml" parent="application">
             <provider
                 android:name="com.enterprise.appstore.EnterpriseAppStoreFileProvider"
@@ -58,7 +63,7 @@
             </provider>
         </config-file>
 
-        <!-- Cordova feature registration -->
+        <!-- Register plugin feature with Cordova -->
         <config-file target="res/xml/config.xml" parent="/*">
             <feature name="EnterpriseAppStore">
                 <param name="android-package"
@@ -74,7 +79,7 @@
             src="src/android/EnterpriseAppStoreFileProvider.java"
             target-dir="src/com/enterprise/appstore" />
 
-        <!-- FileProvider paths resource file -->
+        <!-- FileProvider path configuration (defines accessible directories) -->
         <resource-file
             src="res/android/xml/enterprise_appstore_paths.xml"
             target="res/xml/enterprise_appstore_paths.xml" />
@@ -84,27 +89,33 @@
     <!-- ============================================================
          iOS
     ============================================================ -->
-    
-<platform name="ios">
+    <platform name="ios">
 
-        <!--  1. Cordova feature registration -->
+        <!-- 1. Register plugin feature with Cordova -->
         <config-file target="config.xml" parent="/*">
             <feature name="EnterpriseAppStore">
                 <param name="ios-package" value="EnterpriseAppStore" />
             </feature>
         </config-file>
 
-        <!-- 2. LSApplicationQueriesSchemes
-              URLs scheme need to check in isAppInstalled()-->
+        <!-- 2. Declare URL schemes that can be queried via canOpenURL().
+                Required for isAppInstalled() on iOS 9+.
+                Add URL scheme of each app you want to check.
+                "cydia" is used for jailbreak detection in checkAppShield(). -->
         <config-file target="*-Info.plist"
                      parent="LSApplicationQueriesSchemes">
             <array>
-                <string>cydia</string>
+                <string>EnterpriseAppStore_2</string>
+                <string>New IOS App</string>
+                <!-- Add more URL schemes here as needed -->
+                <!-- <string>hrconnect</string> -->
+                <!-- <string>timekeeping</string> -->
             </array>
         </config-file>
 
-        <!-- 3. NSAppTransportSecurity
-             Allow HTTPS to manifest.plist server -->
+        <!-- 3. App Transport Security — enforce HTTPS for OTA installation.
+                NSExceptionDomains key must be the domain name ONLY,
+                without "https://" prefix. -->
         <config-file target="*-Info.plist"
                      parent="NSAppTransportSecurity">
             <dict>
@@ -112,8 +123,7 @@
                 <false/>
                 <key>NSExceptionDomains</key>
                 <dict>
-                    <!-- add domain -->
-                    <key>https://hscl-dev.outsystemscloud.com</key>
+                    <key>hscl-dev.outsystemscloud.com</key>
                     <dict>
                         <key>NSIncludesSubdomains</key>
                         <true/>
@@ -124,13 +134,14 @@
             </dict>
         </config-file>
 
-        <!-- 4. UIKit framework -->
+        <!-- 4. UIKit framework — required for UIDevice, UIScreen, UIApplication -->
         <framework src="UIKit.framework" weak="false" />
 
         <!-- 5. Swift source file -->
         <source-file src="src/ios/EnterpriseAppStore.swift" />
 
-    </platform>
+        <!-- Note: cordova-plugin-add-swift-support is NOT required for MABS 10+ -->
 
+    </platform>
 
 </plugin>
