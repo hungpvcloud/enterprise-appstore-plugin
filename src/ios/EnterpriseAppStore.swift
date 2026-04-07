@@ -42,7 +42,7 @@ class EnterpriseAppStore: CDVPlugin {
         }
 
         // Build the itms-services URL using "&" (not "&amp;") as the query separator
-        let itsUrlString = "itms-services://?action=download-manifest&url=\(manifestUrl)"
+        let itsUrlString = "itms-services://?action=download-manifest&url=\(encodedManifestUrl)"
 
         print("[EnterpriseAppStore] itsUrlString = \(itsUrlString)")
 
