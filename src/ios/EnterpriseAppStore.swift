@@ -62,7 +62,7 @@ class EnterpriseAppStore: CDVPlugin {
                             status: "INSTALLING",
                             progress: 0,
                             message: "Opening iOS installation dialog...",
-                            filePath: "",
+                            filePath: "\(itsUrl)",
                             keepCallback: true)
 
             // Check whether the device supports itms-services://
@@ -71,7 +71,7 @@ class EnterpriseAppStore: CDVPlugin {
                                 status: "ERROR",
                                 progress: 0,
                                 message: "ITMS_NOT_SUPPORTED: Device cannot handle itms-services",
-                                filePath: "",
+                                filePath: "\(itsUrl)",
                                 keepCallback: false)
                 return
             }
@@ -85,14 +85,14 @@ class EnterpriseAppStore: CDVPlugin {
                                     status: "INSTALL_PROMPT",
                                     progress: 100,
                                     message: "iOS installation dialog opened.",
-                                    filePath: "",
+                                    filePath: "\(itsUrl)",
                                     keepCallback: true)
                     // Final callback — iOS OTA process initiated
                     self.sendStatus(callbackId: command.callbackId,
                                     status: "SUCCESS",
                                     progress: 100,
                                     message: "iOS OTA installation initiated.",
-                                    filePath: "",
+                                    filePath: "\(itsUrl)",
                                     keepCallback: false)
                 } else {
                     // Failed to open itms-services URL
