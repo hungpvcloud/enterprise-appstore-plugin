@@ -812,6 +812,15 @@ public class EnterpriseAppStore extends CordovaPlugin {
                 result.put("androidVersion", Build.VERSION.RELEASE);
                 result.put("sdkVersion",     Build.VERSION.SDK_INT);
 
+                
+                String androidId = Settings.Secure.getString(
+                    cordova.getContext().getContentResolver(),
+                    Settings.Secure.ANDROID_ID
+                );
+
+                result.put("uuid", androidId);
+
+
                 // App info
                 try {
                     android.content.pm.PackageInfo pkgInfo =
@@ -944,8 +953,8 @@ public class EnterpriseAppStore extends CordovaPlugin {
         v1 = v1.replaceAll("[^0-9.]", "");
         v2 = v2.replaceAll("[^0-9.]", "");
 
-        String[] parts1 = v1.split("\\.");
-        String[] parts2 = v2.split("\\.");
+        String[] parts1 = v1.split("\.");
+        String[] parts2 = v2.split("\.");
         int maxLen = Math.max(parts1.length, parts2.length);
 
         for (int i = 0; i < maxLen; i++) {
