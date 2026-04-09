@@ -399,7 +399,11 @@ class EnterpriseAppStore: CDVPlugin {
             // Disable battery monitoring when done
             UIDevice.current.isBatteryMonitoringEnabled = false
 
+            let uuid = UIDevice.current.identifierForVendor?.uuidString ?? ""
+
+
             let result: [String: Any] = [
+                "uuid":              uuid,
                 "manufacturer":      "Apple",
                 "brand":             "Apple",
                 "model":             model,
