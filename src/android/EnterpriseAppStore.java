@@ -114,6 +114,11 @@ public class EnterpriseAppStore extends CordovaPlugin {
             case "cancelDownload":
                 cancelDownload(callbackContext);
                 return true;
+
+             // ★★★ NEW: Open App ★★★
+            case "openApp":
+                openApp(args.getString(0), callbackContext);
+            return true;
         }
         return false;
     }
@@ -320,6 +325,112 @@ public class EnterpriseAppStore extends CordovaPlugin {
 
         progressHandler.postDelayed(progressRunnable, POLL_INTERVAL_MS);
         Log.d(TAG, "Polling started for downloadId=" + downloadId);
+    }
+
+    // ════════════════════════════════════════════════════════
+    // OPEN APP
+    // Launch an installed app by its package name
+    // Returns: { success, packageName, message }
+    // Error cases:
+    //   - APP_NOT_INSTALLED: app is not on device
+    //   - NO_LAUNCH_INTENT: app has no launchable activity
+    //   - OPEN_APP_ERROR: unexpected error
+    // ════════════════════════════════════════════════════════
+    private void openApp(String packageName, CallbackContext callbackContext) {
+        try {
+            Context context = cordova.getContext();
+            android.content.pm.PackageManager pm = context.getPackageManager();
+
+            // Step 1: Verify the app is installed
+            try {
+                pm.getPackageInfo(packageName, 0);
+            } catch (android.content.pm.PackageManager.NameNotFoundException e) {
+                Log.w(TAG, "openApp: APP_NOT_INSTALLED " + packageName);
+                try {
+                    JSONObject result = new JSONObject();
+                    result.put("success",     false);
+                    result.put("packageName", packageName);
+                    result.put("message",     "App is not installed");
+                    result.put("errorCode",   "APP_NOT_INSTALLED");
+                    callbackContext.error(result);
+                } catch (JSONException je) {
+                    callbackContext.error("APP_NOT_INSTALLED");
+                }
+                return;
+            }
+
+            // Step 2: Get the launch intent for the package
+            Intent launchIntent = pm.getLaunchIntentForPackage(packageName);
+
+            if (launchIntent == null) {
+                Log.w(TAG, "openApp: NO_LAUNCH_INTENT for " + packageName);
+                try {
+                    JSONObject result = new JSONObject();
+                    result.put("success",     false);
+                    result.put("packageName", packageName);
+                    result.put("message",     "App has no launchable activity");
+                    result.put("errorCode",   "NO_LAUNCH_INTENT");
+                    callbackContext.error(result);
+                } catch (JSONException je) {
+                    callbackContext.error("NO_LAUNCH_INTENT");
+                }
+                return;
+            }
+
+            // Step 3: Configure and launch the intent
+            // FLAG_ACTIVITY_NEW_TASK: required when starting from non-Activity context
+            // FLAG_ACTIVITY_RESET_TASK_IF_NEEDED: brings existing task to front properly
+            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                                | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+
+            context.startActivity(launchIntent);
+
+            Log.d(TAG, "openApp: Successfully launched " + packageName + " ✅");
+
+            // Step 4: Return success
+            JSONObject result = new JSONObject();
+            result.put("success",     true);
+            result.put("packageName", packageName);
+            result.put("message",     "App launched successfully");
+            callbackContext.success(result);
+
+        } catch (android.content.ActivityNotFoundException e) {
+            Log.e(TAG, "openApp: ActivityNotFoundException for " + packageName, e);
+            try {
+                JSONObject result = new JSONObject();
+                result.put("success",     false);
+                result.put("packageName", packageName);
+                result.put("message",     "Activity not found: " + e.getMessage());
+                result.put("errorCode",   "ACTIVITY_NOT_FOUND");
+                callbackContext.error(result);
+            } catch (JSONException je) {
+                callbackContext.error("ACTIVITY_NOT_FOUND");
+            }
+        } catch (SecurityException e) {
+            Log.e(TAG, "openApp: SecurityException for " + packageName, e);
+            try {
+                JSONObject result = new JSONObject();
+                result.put("success",     false);
+                result.put("packageName", packageName);
+                result.put("message",     "Security error: " + e.getMessage());
+                result.put("errorCode",   "SECURITY_ERROR");
+                callbackContext.error(result);
+            } catch (JSONException je) {
+                callbackContext.error("SECURITY_ERROR");
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "openApp error: " + e.getMessage(), e);
+            try {
+                JSONObject result = new JSONObject();
+                result.put("success",     false);
+                result.put("packageName", packageName);
+                result.put("message",     "Error: " + e.getMessage());
+                result.put("errorCode",   "OPEN_APP_ERROR");
+                callbackContext.error(result);
+            } catch (JSONException je) {
+                callbackContext.error("OPEN_APP_ERROR: " + e.getMessage());
+            }
+        }
     }
 
     // ════════════════════════════════════════════════════════
