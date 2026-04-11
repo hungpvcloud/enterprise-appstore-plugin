@@ -497,6 +497,136 @@ class EnterpriseAppStore: CDVPlugin {
         self.commandDelegate.send(pluginResult, callbackId: command.callbackId)
     }
 
+        // ════════════════════════════════════════════════════════
+    // OPEN APP  ★★★ UPDATED — No LSApplicationQueriesSchemes needed ★★★
+    // Launch an installed app by its URL scheme on iOS.
+    //
+    // Parameter: urlScheme — URL scheme of the target app
+    //            e.g. "myapp" (without "://")
+    //            or full URL "myapp://some/path?param=value"
+    //
+    // ⚠️ This version uses UIApplication.open() directly
+    //    WITHOUT calling canOpenURL() first.
+    //    Therefore NO LSApplicationQueriesSchemes declaration
+    //    is needed in Info.plist.
+    //
+    // Success: {
+    //   success:     true,
+    //   scheme:      "myapp",
+    //   packageName: "myapp",
+    //   message:     "App launched successfully"
+    // }
+    //
+    // Error codes:
+    //   - INVALID_SCHEME     : empty or invalid URL scheme
+    //   - APP_NOT_INSTALLED  : open() returned false (app not installed
+    //                          or scheme not registered)
+    //   - OPEN_APP_ERROR     : unexpected error
+    // ════════════════════════════════════════════════════════
+    @objc(openApp:)
+    func openApp(command: CDVInvokedUrlCommand) {
+
+        // Step 1: Validate the URL scheme argument
+        guard let urlScheme = command.arguments[0] as? String,
+              !urlScheme.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+
+            print("[EnterpriseAppStore] openApp: INVALID_SCHEME — empty or nil")
+
+            let result: [String: Any] = [
+                "success":     false,
+                "scheme":      "",
+                "packageName": "",
+                "message":     "URL scheme is required",
+                "errorCode":   "INVALID_SCHEME"
+            ]
+            let pluginResult = CDVPluginResult(
+                status: CDVCommandStatus_ERROR,
+                messageAs: result
+            )
+            pluginResult?.setKeepCallbackAs(false)
+            self.commandDelegate.send(pluginResult, callbackId: command.callbackId)
+            return
+        }
+
+        let scheme = urlScheme.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Step 2: Build the URL from the scheme
+        // Support multiple formats:
+        //   "myapp"                    → "myapp://"
+        //   "myapp://"                 → "myapp://"
+        //   "myapp://path?key=value"   → "myapp://path?key=value"
+        let urlString: String
+        if scheme.contains("://") {
+            urlString = scheme
+        } else {
+            urlString = "\(scheme)://"
+        }
+
+        guard let appUrl = URL(string: urlString) else {
+            print("[EnterpriseAppStore] openApp: INVALID_SCHEME — cannot create URL from '\(urlString)'")
+
+            let result: [String: Any] = [
+                "success":     false,
+                "scheme":      scheme,
+                "packageName": scheme,
+                "message":     "Cannot create URL from scheme: \(scheme)",
+                "errorCode":   "INVALID_SCHEME"
+            ]
+            let pluginResult = CDVPluginResult(
+                status: CDVCommandStatus_ERROR,
+                messageAs: result
+            )
+            pluginResult?.setKeepCallbackAs(false)
+            self.commandDelegate.send(pluginResult, callbackId: command.callbackId)
+            return
+        }
+
+        // Step 3: Open the app DIRECTLY — no canOpenURL() check needed
+        // UIApplication.open() does NOT require LSApplicationQueriesSchemes
+        // The completion handler tells us if it succeeded or failed
+        DispatchQueue.main.async {
+            print("[EnterpriseAppStore] openApp: Opening '\(urlString)' directly (no canOpenURL check)...")
+
+            UIApplication.shared.open(appUrl, options: [:]) { success in
+                print("[EnterpriseAppStore] openApp: open result = \(success)")
+
+                if success {
+                    // App launched successfully
+                    let result: [String: Any] = [
+                        "success":     true,
+                        "scheme":      scheme,
+                        "packageName": scheme,
+                        "message":     "App launched successfully"
+                    ]
+                    let pluginResult = CDVPluginResult(
+                        status: CDVCommandStatus_OK,
+                        messageAs: result
+                    )
+                    pluginResult?.setKeepCallbackAs(false)
+                    self.commandDelegate.send(pluginResult, callbackId: command.callbackId)
+
+                } else {
+                    // open() returned false — app not installed or scheme invalid
+                    print("[EnterpriseAppStore] openApp: APP_NOT_INSTALLED — open() returned false for '\(urlString)'")
+
+                    let result: [String: Any] = [
+                        "success":     false,
+                        "scheme":      scheme,
+                        "packageName": scheme,
+                        "message":     "App is not installed or scheme '\(scheme)' is not registered. URL: \(urlString)",
+                        "errorCode":   "APP_NOT_INSTALLED"
+                    ]
+                    let pluginResult = CDVPluginResult(
+                        status: CDVCommandStatus_ERROR,
+                        messageAs: result
+                    )
+                    pluginResult?.setKeepCallbackAs(false)
+                    self.commandDelegate.send(pluginResult, callbackId: command.callbackId)
+                }
+            }
+        }
+    }
+
     // ── Helper: Semantic Version Comparison ──────────────────
     // Returns true if v1 is less than v2 (i.e. an update is needed).
     // Supports versions like "1.2.3", "v2.0", "10.0.1"
