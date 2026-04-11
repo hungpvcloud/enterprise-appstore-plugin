@@ -229,6 +229,72 @@ var EnterpriseAppStore = {
                 successCallback('NO_DOWNLOAD_ON_IOS');
             }
         }
+    },
+
+    // ════════════════════════════════════════════════════════
+    // 10. OPEN APP  ★★★ NEW ★★★
+    // ────────────────────────────────────────────────────────
+    // Launch an installed app by package name (Android)
+    // or URL scheme (iOS)
+    //
+    // ── Android ─────────────────────────────────────────────
+    //   packageNameOrScheme: "com.example.myapp"
+    //   Uses getLaunchIntentForPackage() to open the app
+    //
+    //   Success: {
+    //     success:     true,
+    //     packageName: "com.example.myapp",
+    //     message:     "App launched successfully"
+    //   }
+    //
+    //   Error: {
+    //     success:     false,
+    //     packageName: "com.example.myapp",
+    //     message:     "...",
+    //     errorCode:   "APP_NOT_INSTALLED"
+    //                | "NO_LAUNCH_INTENT"
+    //                | "ACTIVITY_NOT_FOUND"
+    //                | "SECURITY_ERROR"
+    //                | "OPEN_APP_ERROR"
+    //   }
+    //
+    // ── iOS ─────────────────────────────────────────────────
+    //   packageNameOrScheme: "myapp" (URL scheme without ://)
+    //   Uses UIApplication.openURL("myapp://") to open the app
+    //
+    //   ⚠️ Scheme must be declared in LSApplicationQueriesSchemes
+    //      in Info.plist
+    //
+    //   Success: {
+    //     success:     true,
+    //     scheme:      "myapp",
+    //     message:     "App launched successfully"
+    //   }
+    //
+    //   Error: {
+    //     success:     false,
+    //     scheme:      "myapp",
+    //     message:     "...",
+    //     errorCode:   "APP_NOT_INSTALLED"
+    //                | "INVALID_SCHEME"
+    //                | "OPEN_APP_ERROR"
+    //   }
+    // ════════════════════════════════════════════════════════
+    openApp: function(packageNameOrScheme, successCallback, errorCallback) {
+        if (!packageNameOrScheme || packageNameOrScheme.trim() === '') {
+            if (typeof errorCallback === 'function') {
+                errorCallback({
+                    success:   false,
+                    message:   'Package name or URL scheme is required',
+                    errorCode: 'INVALID_ARGUMENT'
+                });
+            }
+            return;
+        }
+
+        exec(successCallback, errorCallback,
+            'EnterpriseAppStore', 'openApp',
+            [packageNameOrScheme.trim()]);
     }
 
 };
