@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <plugin
     id="enterprise-appstore-plugin"
-    version="1.2.4"
+    version="1.3.0"
     xmlns="http://apache.org/cordova/ns/plugins/1.0"
     xmlns:android="http://schemas.android.com/apk/res/android">
 
     <name>EnterpriseAppStore</name>
-    <description>Enterprise App Store Plugin - Download and Install Apps (Android + iOS)</description>
+    <description>Enterprise App Store Plugin - Download, Install, Device Info, Open App (Android + iOS)</description>
     <license>MIT</license>
-    <keywords>cordova, outsystems, enterprise, appstore, download, install</keywords>
+    <keywords>cordova, outsystems, enterprise, appstore, download, install, openapp, deviceinfo</keywords>
 
     <!-- Minimum engine requirements -->
     <engines>
@@ -37,7 +37,8 @@
             <uses-permission android:name="android.permission.INTERNET" />
             <!-- Required to install APK files programmatically -->
             <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
-            <!-- Required on Android 11+ to query other installed packages -->
+            <!-- Required on Android 11+ to query other installed packages
+                 Used by: isAppInstalled(), getAppVersion(), checkUpdate(), openApp() -->
             <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
             <!-- External storage write access (Android 9 and below only) -->
             <uses-permission
@@ -101,30 +102,32 @@
         <!-- 2. Declare URL schemes that can be queried via canOpenURL().
                 Required for isAppInstalled() on iOS 9+.
                 Add URL scheme of each app you want to check.
-                "cydia" is used for jailbreak detection in checkAppShield(). -->
-        <!-- <config-file target="*-Info.plist"
+                "cydia" is used for jailbreak detection in checkAppShield().
+
+                 NOTE for openApp():
+                openApp() uses UIApplication.open() directly which does NOT
+                require LSApplicationQueriesSchemes. So you only need to add
+                schemes here for isAppInstalled() canOpenURL() checks.
+
+                If you use openApp() exclusively (without isAppInstalled),
+                you can remove app schemes and keep only "cydia". -->
+        <config-file target="*-Info.plist"
                      parent="LSApplicationQueriesSchemes">
             <array>
+                <!-- Required for jailbreak detection in checkAppShield() -->
+                <string>cydia</string>
+                <!-- Add schemes for apps you want to check with isAppInstalled() -->
+                <!-- These are NOT required for openApp() -->
                 <string>EnterpriseAppStore_2</string>
                 <string>New IOS App</string>
             </array>
-        </config-file> -->
-
-
-        <config-file target="*-Info.plist" parent="LSApplicationQueriesSchemes">
-            <array>
-                <string>cydia</string> 
-                <string>EnterpriseAppStore_2</string>
-                <string>New IOS App</string> </array>
         </config-file>
 
-        <!-- 4. UIKit framework — required for UIDevice, UIScreen, UIApplication -->
+        <!-- 3. UIKit framework — required for UIDevice, UIScreen, UIApplication -->
         <framework src="UIKit.framework" weak="false" />
 
-        <!-- 5. Swift source file -->
+        <!-- 4. Swift source file -->
         <source-file src="src/ios/EnterpriseAppStore.swift" />
-
-        <!-- Note: cordova-plugin-add-swift-support is NOT required for MABS 10+ -->
 
     </platform>
 
