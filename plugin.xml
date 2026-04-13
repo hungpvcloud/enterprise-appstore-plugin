@@ -99,6 +99,39 @@
             </feature>
         </config-file>
 
+                <!-- ─────────────────────────────────────────── -->
+        <!-- App Transport Security (ATS) Configuration  -->
+        <!--                                             -->
+        <!-- Required to allow HTTPS calls to:           -->
+        <!--   • api.ipsw.me (device model name lookup)  -->
+        <!--                                             -->
+        <!-- Note: IPSW.me uses valid HTTPS so we only   -->
+        <!-- need to ensure ATS is not blocking it.      -->
+        <!-- If your app already has                      -->
+        <!-- NSAllowsArbitraryLoads = true, this section -->
+        <!-- is redundant but harmless.                  -->
+        <!-- ─────────────────────────────────────────── -->
+        <config-file target="*-Info.plist" parent="NSAppTransportSecurity">
+            <dict>
+                <key>NSAllowsArbitraryLoads</key>
+                <false/>
+                <key>NSExceptionDomains</key>
+                <dict>
+                    <key>api.ipsw.me</key>
+                    <dict>
+                        <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                        <false/>
+                        <key>NSIncludesSubdomains</key>
+                        <true/>
+                        <key>NSExceptionRequiresForwardSecrecy</key>
+                        <false/>
+                        <key>NSExceptionMinimumTLSVersion</key>
+                        <string>TLSv1.2</string>
+                    </dict>
+                </dict>
+            </dict>
+        </config-file>
+
         <!-- 2. Declare URL schemes that can be queried via canOpenURL().
                 Required for isAppInstalled() on iOS 9+.
                 Add URL scheme of each app you want to check.
@@ -125,6 +158,10 @@
 
         <!-- 3. UIKit framework — required for UIDevice, UIScreen, UIApplication -->
         <framework src="UIKit.framework" weak="false" />
+        
+        <!-- Security.framework — Required for Keychain  -->
+        <!-- access (storing persistent UUID)            -->
+        <framework src="Security.framework" />
 
         <!-- 4. Swift source file -->
         <source-file src="src/ios/EnterpriseAppStore.swift" />
