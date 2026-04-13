@@ -92,13 +92,15 @@
     ============================================================ -->
     <platform name="ios">
 
-         <!-- ⭐ Method 1: dependency on swift support plugin -->
-        <dependency id="cordova-plugin-add-swift-support" version="2.0.2" />
+         <preference name="UseSwiftLanguageVersion" value="5" />
 
-        <!-- ⭐ Method 2: Edit build.xcconfig directly -->
+        <!-- Alternative: Set via build settings directly -->
         <config-file target="build.xcconfig" parent="">
             SWIFT_VERSION = 5.0
         </config-file>
+
+        <!-- Hook to ensure Swift version is set correctly -->
+        <preference name="SwiftVersion" value="5.0" />
 
         <!-- 1. Register plugin feature with Cordova -->
         <config-file target="config.xml" parent="/*">
