@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <plugin
     id="enterprise-appstore-plugin"
-    version="1.3.0"
+    version="1.3.1"
     xmlns="http://apache.org/cordova/ns/plugins/1.0"
     xmlns:android="http://schemas.android.com/apk/res/android">
 
@@ -91,36 +91,14 @@
          iOS
     ============================================================ -->
     <platform name="ios">
-
-         <preference name="UseSwiftLanguageVersion" value="5" />
-
-        <!-- Alternative: Set via build settings directly -->
-        <config-file target="build.xcconfig" parent="">
-            SWIFT_VERSION = 5.0
-        </config-file>
-
-        <!-- Hook to ensure Swift version is set correctly -->
-        <preference name="SwiftVersion" value="5.0" />
-
-        <!-- 1. Register plugin feature with Cordova -->
+         <!-- Register plugin -->
         <config-file target="config.xml" parent="/*">
             <feature name="EnterpriseAppStore">
                 <param name="ios-package" value="EnterpriseAppStore" />
             </feature>
         </config-file>
 
-                <!-- ─────────────────────────────────────────── -->
-        <!-- App Transport Security (ATS) Configuration  -->
-        <!--                                             -->
-        <!-- Required to allow HTTPS calls to:           -->
-        <!--   • api.ipsw.me (device model name lookup)  -->
-        <!--                                             -->
-        <!-- Note: IPSW.me uses valid HTTPS so we only   -->
-        <!-- need to ensure ATS is not blocking it.      -->
-        <!-- If your app already has                      -->
-        <!-- NSAllowsArbitraryLoads = true, this section -->
-        <!-- is redundant but harmless.                  -->
-        <!-- ─────────────────────────────────────────── -->
+        <!-- ATS exception for IPSW.me API -->
         <config-file target="*-Info.plist" parent="NSAppTransportSecurity">
             <dict>
                 <key>NSAllowsArbitraryLoads</key>
@@ -142,40 +120,21 @@
             </dict>
         </config-file>
 
-        <!-- 2. Declare URL schemes that can be queried via canOpenURL().
-                Required for isAppInstalled() on iOS 9+.
-                Add URL scheme of each app you want to check.
-                "cydia" is used for jailbreak detection in checkAppShield().
-
-                 NOTE for openApp():
-                openApp() uses UIApplication.open() directly which does NOT
-                require LSApplicationQueriesSchemes. So you only need to add
-                schemes here for isAppInstalled() canOpenURL() checks.
-
-                If you use openApp() exclusively (without isAppInstalled),
-                you can remove app schemes and keep only "cydia". -->
-        <config-file target="*-Info.plist"
-                     parent="LSApplicationQueriesSchemes">
+        <!-- URL Schemes for OTA install and jailbreak detection -->
+        <config-file target="*-Info.plist" parent="LSApplicationQueriesSchemes">
             <array>
-                <!-- Required for jailbreak detection in checkAppShield() -->
+                <string>itms-services</string>
                 <string>cydia</string>
-                <!-- Add schemes for apps you want to check with isAppInstalled() -->
-                <!-- These are NOT required for openApp() -->
-                <string>EnterpriseAppStore_2</string>
-                <string>New IOS App</string>
             </array>
         </config-file>
 
-        <!-- 3. UIKit framework — required for UIDevice, UIScreen, UIApplication -->
-        <framework src="UIKit.framework" weak="false" />
-        
-        <!-- Security.framework — Required for Keychain  -->
-        <!-- access (storing persistent UUID)            -->
+        <!-- ⭐ Source file: Objective-C (no Swift version issues!) -->
+        <header-file src="src/ios/EnterpriseAppStore.h" />
+        <source-file src="src/ios/EnterpriseAppStore.m" />
+
+        <!-- Frameworks -->
         <framework src="Security.framework" />
-
-        <!-- 4. Swift source file -->
-        <source-file src="src/ios/EnterpriseAppStore.swift" />
-
+        <framework src="UIKit.framework" />
     </platform>
 
 </plugin>
