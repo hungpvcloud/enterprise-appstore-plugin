@@ -1,19 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- ✅ THÊM: Public Downloads /storage/emulated/0/Download/ -->
-    <external-path
-        name="enterprise_apk_public_downloads"
-        path="Download/" />
-
-    <!-- Fallback: App-specific storage -->
+    <!-- App-specific external files directory (No n PERMISSION) -->
     <external-files-path
         name="enterprise_apk_downloads"
         path="Downloads/" />
 
-    <!-- Fallback: Cache -->
+    <!-- Fallback: Cache directory -->
     <cache-path
         name="enterprise_apk_cache"
         path="apk_cache/" />
+
+    <!-- (Must have MANAGE_EXTERNAL_STORAGE on Android 11+) -->
+    <!-- <external-path
+        name="enterprise_apk_public_downloads"
+        path="Download/" /> -->
 
 </paths>
