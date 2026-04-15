@@ -38,6 +38,7 @@ public class EnterpriseAppStore extends CordovaPlugin {
     // ════════════════════════════════════════════════════════
     private static final String TAG                  = "EnterpriseAppStore";
     private static final int    REQUEST_INSTALL_PERM = 1001;
+    private static final int    REQUEST_STORAGE_PERM = 1002;
     private static final int    POLL_INTERVAL_MS     = 800;
     private static final int    MAX_POLL_COUNT       = 1500; // ~20 min
 
@@ -115,17 +116,147 @@ public class EnterpriseAppStore extends CordovaPlugin {
                 cancelDownload(callbackContext);
                 return true;
 
-             // ★★★ NEW: Open App ★★★
             case "openApp":
                 openApp(args.getString(0), callbackContext);
-            return true;
+                return true;
+
+            case "checkStoragePermission":
+                checkStoragePermission(callbackContext);
+                return true;
+
+            case "requestStoragePermission":
+                requestStoragePermissionOnly(callbackContext);
+                return true;
         }
         return false;
     }
 
     // ════════════════════════════════════════════════════════
+    // STORAGE PERMISSION CHECK & REQUEST
+    // ════════════════════════════════════════════════════════
+    private boolean hasStoragePermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Android 11+ cần MANAGE_EXTERNAL_STORAGE
+            return Environment.isExternalStorageManager();
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            // Android 6-10 cần WRITE_EXTERNAL_STORAGE
+            return cordova.hasPermission(
+                    android.Manifest.permission.WRITE_EXTERNAL_STORAGE);
+        }
+        return true; // Android 5 trở xuống không cần runtime permission
+    }
+
+    private void checkStoragePermission(CallbackContext callbackContext) {
+        try {
+            JSONObject result = new JSONObject();
+            result.put("hasPermission", hasStoragePermission());
+            result.put("sdkVersion", Build.VERSION.SDK_INT);
+            callbackContext.success(result);
+        } catch (JSONException e) {
+            callbackContext.error("ERROR_CHECK_STORAGE_PERMISSION");
+        }
+    }
+
+    private void requestStoragePermissionOnly(CallbackContext callbackContext) {
+        if (hasStoragePermission()) {
+            try {
+                JSONObject result = new JSONObject();
+                result.put("status", "PERMISSION_ALREADY_GRANTED");
+                result.put("hasPermission", true);
+                callbackContext.success(result);
+            } catch (JSONException e) {
+                callbackContext.success("PERMISSION_ALREADY_GRANTED");
+            }
+            return;
+        }
+
+        pendingInstallCallback = callbackContext;
+        pendingInstallUrl = null;
+        pendingInstallFileName = null;
+
+        requestStoragePermissionInternal();
+    }
+
+    private void requestStoragePermissionInternal() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Android 11+: Mở Settings để grant MANAGE_EXTERNAL_STORAGE
+            try {
+                Intent intent = new Intent(
+                        Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
+                intent.setData(Uri.parse("package:" 
+                        + cordova.getContext().getPackageName()));
+                
+                cordova.setActivityResultCallback(this);
+                cordova.getActivity().startActivityForResult(
+                        intent, REQUEST_STORAGE_PERM);
+                
+                Log.d(TAG, "Opening storage permission settings for Android 11+");
+                
+            } catch (Exception e) {
+                Log.e(TAG, "Cannot open storage settings", e);
+                if (pendingInstallCallback != null) {
+                    sendStatus(pendingInstallCallback, "ERROR", 0,
+                            "Cannot open storage settings: " + e.getMessage(),
+                            "", false);
+                }
+            }
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            // Android 6-10: Request runtime permission
+            cordova.requestPermissions(this, REQUEST_STORAGE_PERM,
+                    new String[]{android.Manifest.permission.WRITE_EXTERNAL_STORAGE});
+            
+            Log.d(TAG, "Requesting WRITE_EXTERNAL_STORAGE for Android 6-10");
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, 
+                                          String[] permissions,
+                                          int[] grantResults) {
+        if (requestCode == REQUEST_STORAGE_PERM) {
+            boolean granted = grantResults.length > 0 
+                    && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED;
+            
+            Log.d(TAG, "Storage permission result: " + granted);
+            
+            if (granted) {
+                if (pendingInstallCallback != null) {
+                    if (pendingInstallUrl != null && !pendingInstallUrl.isEmpty()) {
+                        // Resume download
+                        downloadAndInstall(pendingInstallUrl, 
+                                pendingInstallFileName, pendingInstallCallback);
+                    } else {
+                        // Just permission check
+                        try {
+                            JSONObject result = new JSONObject();
+                            result.put("status", "PERMISSION_GRANTED");
+                            result.put("hasPermission", true);
+                            pendingInstallCallback.success(result);
+                        } catch (JSONException e) {
+                            pendingInstallCallback.success("PERMISSION_GRANTED");
+                        }
+                    }
+                }
+            } else {
+                if (pendingInstallCallback != null) {
+                    sendStatus(pendingInstallCallback, "PERMISSION_DENIED", 0,
+                            "Storage permission denied. Cannot download to public folder.",
+                            "", false);
+                }
+            }
+            
+            // Reset
+            if (pendingInstallUrl == null) {
+                pendingInstallCallback = null;
+            }
+            pendingInstallUrl = null;
+            pendingInstallFileName = null;
+        }
+    }
+
+    // ════════════════════════════════════════════════════════
     // DOWNLOAD AND INSTALL
-    // Uses POLLING — compatible with Xiaomi HyperOS
+    // Uses app-specific directory (no permission needed)
     // ════════════════════════════════════════════════════════
     private void downloadAndInstall(String url, String fileName,
                                     CallbackContext callbackContext) {
@@ -138,17 +269,21 @@ public class EnterpriseAppStore extends CordovaPlugin {
                 DownloadManager dm = (DownloadManager)
                         context.getSystemService(Context.DOWNLOAD_SERVICE);
 
-                // Public Downloads — not blocked by MIUI/HyperOS
-                File downloadDir = Environment
-                        .getExternalStoragePublicDirectory(
-                                Environment.DIRECTORY_DOWNLOADS);
-                if (!downloadDir.exists()) downloadDir.mkdirs();
+                // ✅ SOLUTION: Use app-specific external files directory
+                // No WRITE_EXTERNAL_STORAGE permission needed!
+                File downloadDir = new File(context.getExternalFilesDir(null), "Downloads");
+                if (!downloadDir.exists()) {
+                    boolean created = downloadDir.mkdirs();
+                    Log.d(TAG, "Created download dir: " + created 
+                            + " - " + downloadDir.getAbsolutePath());
+                }
 
                 // Remove old APK if exists
                 File apkFile = new File(downloadDir, fileName);
                 if (apkFile.exists()) {
-                    apkFile.delete();
-                    Log.d(TAG, "Deleted old APK: " + apkFile.getAbsolutePath());
+                    boolean deleted = apkFile.delete();
+                    Log.d(TAG, "Deleted old APK: " + deleted 
+                            + " - " + apkFile.getAbsolutePath());
                 }
 
                 // Configure DownloadManager request
@@ -156,13 +291,12 @@ public class EnterpriseAppStore extends CordovaPlugin {
                         new DownloadManager.Request(Uri.parse(url));
                 request.setTitle(fileName);
                 request.setDescription("Downloading " + fileName);
-                request.setMimeType(
-                        "application/vnd.android.package-archive");
+                request.setMimeType("application/vnd.android.package-archive");
                 request.setNotificationVisibility(
-                        DownloadManager.Request
-                                .VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-                request.setDestinationInExternalPublicDir(
-                        Environment.DIRECTORY_DOWNLOADS, fileName);
+                        DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                
+                // ✅ Save to app-specific directory using Uri
+                request.setDestinationUri(Uri.fromFile(apkFile));
 
                 downloadId = dm.enqueue(request);
 
@@ -328,112 +462,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
     }
 
     // ════════════════════════════════════════════════════════
-    // OPEN APP
-    // Launch an installed app by its package name
-    // Returns: { success, packageName, message }
-    // Error cases:
-    //   - APP_NOT_INSTALLED: app is not on device
-    //   - NO_LAUNCH_INTENT: app has no launchable activity
-    //   - OPEN_APP_ERROR: unexpected error
-    // ════════════════════════════════════════════════════════
-    private void openApp(String packageName, CallbackContext callbackContext) {
-        try {
-            Context context = cordova.getContext();
-            android.content.pm.PackageManager pm = context.getPackageManager();
-
-            // Step 1: Verify the app is installed
-            try {
-                pm.getPackageInfo(packageName, 0);
-            } catch (android.content.pm.PackageManager.NameNotFoundException e) {
-                Log.w(TAG, "openApp: APP_NOT_INSTALLED " + packageName);
-                try {
-                    JSONObject result = new JSONObject();
-                    result.put("success",     false);
-                    result.put("packageName", packageName);
-                    result.put("message",     "App is not installed");
-                    result.put("errorCode",   "APP_NOT_INSTALLED");
-                    callbackContext.error(result);
-                } catch (JSONException je) {
-                    callbackContext.error("APP_NOT_INSTALLED");
-                }
-                return;
-            }
-
-            // Step 2: Get the launch intent for the package
-            Intent launchIntent = pm.getLaunchIntentForPackage(packageName);
-
-            if (launchIntent == null) {
-                Log.w(TAG, "openApp: NO_LAUNCH_INTENT for " + packageName);
-                try {
-                    JSONObject result = new JSONObject();
-                    result.put("success",     false);
-                    result.put("packageName", packageName);
-                    result.put("message",     "App has no launchable activity");
-                    result.put("errorCode",   "NO_LAUNCH_INTENT");
-                    callbackContext.error(result);
-                } catch (JSONException je) {
-                    callbackContext.error("NO_LAUNCH_INTENT");
-                }
-                return;
-            }
-
-            // Step 3: Configure and launch the intent
-            // FLAG_ACTIVITY_NEW_TASK: required when starting from non-Activity context
-            // FLAG_ACTIVITY_RESET_TASK_IF_NEEDED: brings existing task to front properly
-            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
-                                | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
-
-            context.startActivity(launchIntent);
-
-            Log.d(TAG, "openApp: Successfully launched " + packageName + " ✅");
-
-            // Step 4: Return success
-            JSONObject result = new JSONObject();
-            result.put("success",     true);
-            result.put("packageName", packageName);
-            result.put("message",     "App launched successfully");
-            callbackContext.success(result);
-
-        } catch (android.content.ActivityNotFoundException e) {
-            Log.e(TAG, "openApp: ActivityNotFoundException for " + packageName, e);
-            try {
-                JSONObject result = new JSONObject();
-                result.put("success",     false);
-                result.put("packageName", packageName);
-                result.put("message",     "Activity not found: " + e.getMessage());
-                result.put("errorCode",   "ACTIVITY_NOT_FOUND");
-                callbackContext.error(result);
-            } catch (JSONException je) {
-                callbackContext.error("ACTIVITY_NOT_FOUND");
-            }
-        } catch (SecurityException e) {
-            Log.e(TAG, "openApp: SecurityException for " + packageName, e);
-            try {
-                JSONObject result = new JSONObject();
-                result.put("success",     false);
-                result.put("packageName", packageName);
-                result.put("message",     "Security error: " + e.getMessage());
-                result.put("errorCode",   "SECURITY_ERROR");
-                callbackContext.error(result);
-            } catch (JSONException je) {
-                callbackContext.error("SECURITY_ERROR");
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "openApp error: " + e.getMessage(), e);
-            try {
-                JSONObject result = new JSONObject();
-                result.put("success",     false);
-                result.put("packageName", packageName);
-                result.put("message",     "Error: " + e.getMessage());
-                result.put("errorCode",   "OPEN_APP_ERROR");
-                callbackContext.error(result);
-            } catch (JSONException je) {
-                callbackContext.error("OPEN_APP_ERROR: " + e.getMessage());
-            }
-        }
-    }
-
-    // ════════════════════════════════════════════════════════
     // RESOLVE DOWNLOADED FILE PATH
     // ════════════════════════════════════════════════════════
     private File resolveDownloadedFile(String localUri, File fallbackFile) {
@@ -454,23 +482,10 @@ public class EnterpriseAppStore extends CordovaPlugin {
             }
         }
 
-        // Method 2: Use fallback file object
+        // Method 2: Use fallback file object (should exist!)
         if (fallbackFile != null && fallbackFile.exists()) {
             Log.d(TAG, "Using fallback: " + fallbackFile.getAbsolutePath());
             return fallbackFile;
-        }
-
-        // Method 3: Search in Public Downloads
-        if (fallbackFile != null) {
-            File pub = new File(
-                    Environment.getExternalStoragePublicDirectory(
-                            Environment.DIRECTORY_DOWNLOADS),
-                    fallbackFile.getName());
-            if (pub.exists()) {
-                Log.d(TAG, "Found in public downloads: "
-                        + pub.getAbsolutePath());
-                return pub;
-            }
         }
 
         Log.e(TAG, "File not found anywhere!");
@@ -566,55 +581,99 @@ public class EnterpriseAppStore extends CordovaPlugin {
     @Override
     public void onActivityResult(int requestCode, int resultCode,
                                  Intent data) {
-        if (requestCode != REQUEST_INSTALL_PERM) return;
-
-        boolean hasPermission = false;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            hasPermission = cordova.getContext()
-                    .getPackageManager().canRequestPackageInstalls();
-        }
-
-        Log.d(TAG, "onActivityResult: hasPermission=" + hasPermission);
-
-        if (pendingInstallCallback == null) {
-            Log.w(TAG, "pendingInstallCallback is null!");
-            return;
-        }
-
-        if (hasPermission) {
-            sendStatus(pendingInstallCallback, "PERMISSION_GRANTED", 0,
-                    "Permission granted. Resuming...", "", true);
-
-            if (pendingApkFile != null && pendingApkFile.exists()) {
-                // File already downloaded — install directly
-                Log.d(TAG, "Resume install: " + pendingApkFile.getName());
-                final File   f  = pendingApkFile;
-                final String p  = pendingFilePath;
-                final CallbackContext cb = pendingInstallCallback;
-                cordova.getActivity().runOnUiThread(
-                        () -> installApk(f, p, cb));
-
-            } else if (pendingInstallUrl != null
-                    && !pendingInstallUrl.isEmpty()) {
-                // Not downloaded yet — start download + install
-                Log.d(TAG, "Resume download: " + pendingInstallFileName);
-                downloadAndInstall(pendingInstallUrl,
-                        pendingInstallFileName, pendingInstallCallback);
+        if (requestCode == REQUEST_INSTALL_PERM) {
+            boolean hasPermission = false;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                hasPermission = cordova.getContext()
+                        .getPackageManager().canRequestPackageInstalls();
             }
 
-        } else {
-            sendStatus(pendingInstallCallback, "PERMISSION_DENIED", 0,
-                    "Install permission denied. "
-                    + "Cannot install APK without this permission.",
-                    "", false);
-        }
+            Log.d(TAG, "onActivityResult INSTALL_PERM: hasPermission=" + hasPermission);
 
-        // Reset all pending state
-        pendingInstallUrl      = null;
-        pendingInstallFileName = null;
-        pendingInstallCallback = null;
-        pendingApkFile         = null;
-        pendingFilePath        = null;
+            if (pendingInstallCallback == null) {
+                Log.w(TAG, "pendingInstallCallback is null!");
+                return;
+            }
+
+            if (hasPermission) {
+                sendStatus(pendingInstallCallback, "PERMISSION_GRANTED", 0,
+                        "Permission granted. Resuming...", "", true);
+
+                if (pendingApkFile != null && pendingApkFile.exists()) {
+                    // File already downloaded — install directly
+                    Log.d(TAG, "Resume install: " + pendingApkFile.getName());
+                    final File   f  = pendingApkFile;
+                    final String p  = pendingFilePath;
+                    final CallbackContext cb = pendingInstallCallback;
+                    cordova.getActivity().runOnUiThread(
+                            () -> installApk(f, p, cb));
+
+                } else if (pendingInstallUrl != null
+                        && !pendingInstallUrl.isEmpty()) {
+                    // Not downloaded yet — start download + install
+                    Log.d(TAG, "Resume download: " + pendingInstallFileName);
+                    downloadAndInstall(pendingInstallUrl,
+                            pendingInstallFileName, pendingInstallCallback);
+                }
+
+            } else {
+                sendStatus(pendingInstallCallback, "PERMISSION_DENIED", 0,
+                        "Install permission denied. "
+                        + "Cannot install APK without this permission.",
+                        "", false);
+            }
+
+            // Reset pending install state
+            pendingInstallUrl      = null;
+            pendingInstallFileName = null;
+            pendingInstallCallback = null;
+            pendingApkFile         = null;
+            pendingFilePath        = null;
+        }
+        else if (requestCode == REQUEST_STORAGE_PERM) {
+            // Handle storage permission result (Android 11+)
+            boolean hasPermission = false;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                hasPermission = Environment.isExternalStorageManager();
+            }
+
+            Log.d(TAG, "onActivityResult STORAGE_PERM: hasPermission=" + hasPermission);
+
+            if (pendingInstallCallback == null) {
+                Log.w(TAG, "pendingInstallCallback is null for storage permission!");
+                return;
+            }
+
+            if (hasPermission) {
+                if (pendingInstallUrl != null && !pendingInstallUrl.isEmpty()) {
+                    // Resume download
+                    downloadAndInstall(pendingInstallUrl, 
+                            pendingInstallFileName, pendingInstallCallback);
+                } else {
+                    // Just permission check
+                    try {
+                        JSONObject result = new JSONObject();
+                        result.put("status", "PERMISSION_GRANTED");
+                        result.put("hasPermission", true);
+                        pendingInstallCallback.success(result);
+                    } catch (JSONException e) {
+                        pendingInstallCallback.success("PERMISSION_GRANTED");
+                    }
+                    pendingInstallCallback = null;
+                }
+            } else {
+                sendStatus(pendingInstallCallback, "PERMISSION_DENIED", 0,
+                        "Storage permission denied. Cannot download to public folder.",
+                        "", false);
+                pendingInstallCallback = null;
+            }
+
+            // Reset storage permission state
+            if (pendingInstallUrl == null) {
+                pendingInstallUrl = null;
+                pendingInstallFileName = null;
+            }
+        }
     }
 
     // ════════════════════════════════════════════════════════
@@ -684,9 +743,108 @@ public class EnterpriseAppStore extends CordovaPlugin {
     }
 
     // ════════════════════════════════════════════════════════
+    // OPEN APP
+    // Launch an installed app by its package name
+    // Returns: { success, packageName, message }
+    // ════════════════════════════════════════════════════════
+    private void openApp(String packageName, CallbackContext callbackContext) {
+        try {
+            Context context = cordova.getContext();
+            android.content.pm.PackageManager pm = context.getPackageManager();
+
+            // Step 1: Verify the app is installed
+            try {
+                pm.getPackageInfo(packageName, 0);
+            } catch (android.content.pm.PackageManager.NameNotFoundException e) {
+                Log.w(TAG, "openApp: APP_NOT_INSTALLED " + packageName);
+                try {
+                    JSONObject result = new JSONObject();
+                    result.put("success",     false);
+                    result.put("packageName", packageName);
+                    result.put("message",     "App is not installed");
+                    result.put("errorCode",   "APP_NOT_INSTALLED");
+                    callbackContext.error(result);
+                } catch (JSONException je) {
+                    callbackContext.error("APP_NOT_INSTALLED");
+                }
+                return;
+            }
+
+            // Step 2: Get the launch intent for the package
+            Intent launchIntent = pm.getLaunchIntentForPackage(packageName);
+
+            if (launchIntent == null) {
+                Log.w(TAG, "openApp: NO_LAUNCH_INTENT for " + packageName);
+                try {
+                    JSONObject result = new JSONObject();
+                    result.put("success",     false);
+                    result.put("packageName", packageName);
+                    result.put("message",     "App has no launchable activity");
+                    result.put("errorCode",   "NO_LAUNCH_INTENT");
+                    callbackContext.error(result);
+                } catch (JSONException je) {
+                    callbackContext.error("NO_LAUNCH_INTENT");
+                }
+                return;
+            }
+
+            // Step 3: Configure and launch the intent
+            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                                | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+
+            context.startActivity(launchIntent);
+
+            Log.d(TAG, "openApp: Successfully launched " + packageName + " ✅");
+
+            // Step 4: Return success
+            JSONObject result = new JSONObject();
+            result.put("success",     true);
+            result.put("packageName", packageName);
+            result.put("message",     "App launched successfully");
+            callbackContext.success(result);
+
+        } catch (android.content.ActivityNotFoundException e) {
+            Log.e(TAG, "openApp: ActivityNotFoundException for " + packageName, e);
+            try {
+                JSONObject result = new JSONObject();
+                result.put("success",     false);
+                result.put("packageName", packageName);
+                result.put("message",     "Activity not found: " + e.getMessage());
+                result.put("errorCode",   "ACTIVITY_NOT_FOUND");
+                callbackContext.error(result);
+            } catch (JSONException je) {
+                callbackContext.error("ACTIVITY_NOT_FOUND");
+            }
+        } catch (SecurityException e) {
+            Log.e(TAG, "openApp: SecurityException for " + packageName, e);
+            try {
+                JSONObject result = new JSONObject();
+                result.put("success",     false);
+                result.put("packageName", packageName);
+                result.put("message",     "Security error: " + e.getMessage());
+                result.put("errorCode",   "SECURITY_ERROR");
+                callbackContext.error(result);
+            } catch (JSONException je) {
+                callbackContext.error("SECURITY_ERROR");
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "openApp error: " + e.getMessage(), e);
+            try {
+                JSONObject result = new JSONObject();
+                result.put("success",     false);
+                result.put("packageName", packageName);
+                result.put("message",     "Error: " + e.getMessage());
+                result.put("errorCode",   "OPEN_APP_ERROR");
+                callbackContext.error(result);
+            } catch (JSONException je) {
+                callbackContext.error("OPEN_APP_ERROR: " + e.getMessage());
+            }
+        }
+    }
+
+    // ════════════════════════════════════════════════════════
     // GET APP VERSION
     // Returns: { packageName, versionName, versionCode }
-    // Error:   "APP_NOT_FOUND"
     // ════════════════════════════════════════════════════════
     private void getAppVersion(String packageName,
                                CallbackContext callbackContext) {
@@ -758,43 +916,35 @@ public class EnterpriseAppStore extends CordovaPlugin {
 
     // ════════════════════════════════════════════════════════
     // CHECK APP SHIELD
-    // Returns: {
-    //   isRooted, isDeveloperMode, isUsbDebugging,
-    //   isEmulator, isInstalledFromStore, isSafe
-    // }
+    // Returns: { isRooted, isDeveloperMode, isUsbDebugging,
+    //            isEmulator, isInstalledFromStore, isSafe }
     // ════════════════════════════════════════════════════════
     private void checkAppShield(CallbackContext callbackContext) {
         cordova.getThreadPool().execute(() -> {
             try {
                 JSONObject result = new JSONObject();
 
-                // Check 1: Rooted
                 boolean isRooted = checkIsRooted();
                 result.put("isRooted", isRooted);
 
-                // Check 2: Developer Mode
                 boolean isDeveloperMode = Settings.Global.getInt(
                         cordova.getContext().getContentResolver(),
                         Settings.Global.DEVELOPMENT_SETTINGS_ENABLED,
                         0) == 1;
                 result.put("isDeveloperMode", isDeveloperMode);
 
-                // Check 3: USB Debugging
                 boolean isUsbDebugging = Settings.Global.getInt(
                         cordova.getContext().getContentResolver(),
                         Settings.Global.ADB_ENABLED,
                         0) == 1;
                 result.put("isUsbDebugging", isUsbDebugging);
 
-                // Check 4: Emulator
                 boolean isEmulator = checkIsEmulator();
                 result.put("isEmulator", isEmulator);
 
-                // Check 5: Installed from Store
                 boolean isFromStore = checkInstalledFromStore();
                 result.put("isInstalledFromStore", isFromStore);
 
-                // Overall safety — blocking: rooted or emulator
                 boolean isSafe = !isRooted && !isEmulator;
                 result.put("isSafe", isSafe);
 
@@ -815,16 +965,12 @@ public class EnterpriseAppStore extends CordovaPlugin {
         });
     }
 
-    // ── Helper: Check Rooted ─────────────────────────────────
     private boolean checkIsRooted() {
-        // Check 1: Build tags
         String buildTags = Build.TAGS;
         if (buildTags != null && buildTags.contains("test-keys")) {
-            Log.d(TAG, "Root detected: test-keys");
             return true;
         }
 
-        // Check 2: Su binary paths
         String[] suPaths = {
             "/system/app/Superuser.apk",
             "/sbin/su", "/system/bin/su",
@@ -835,35 +981,19 @@ public class EnterpriseAppStore extends CordovaPlugin {
         };
         for (String path : suPaths) {
             if (new File(path).exists()) {
-                Log.d(TAG, "Root detected: su found at " + path);
                 return true;
             }
         }
 
-        // Check 3: Try execute su
         try {
             Process process = Runtime.getRuntime().exec("su");
             process.destroy();
-            Log.d(TAG, "Root detected: su executable");
             return true;
-        } catch (Exception ignored) {}
-
-        // Check 4: which su
-        try {
-            Process process = Runtime.getRuntime()
-                    .exec(new String[]{"/system/xbin/which", "su"});
-            BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(process.getInputStream()));
-            if (reader.readLine() != null) {
-                Log.d(TAG, "Root detected: which su returned result");
-                return true;
-            }
         } catch (Exception ignored) {}
 
         return false;
     }
 
-    // ── Helper: Check Emulator ───────────────────────────────
     private boolean checkIsEmulator() {
         return Build.FINGERPRINT.startsWith("generic")
                 || Build.FINGERPRINT.startsWith("unknown")
@@ -878,7 +1008,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
                 || Build.HARDWARE.equals("ranchu");
     }
 
-    // ── Helper: Check Installed From Store ───────────────────
     private boolean checkInstalledFromStore() {
         try {
             Context context = cordova.getContext();
@@ -904,7 +1033,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
 
     // ════════════════════════════════════════════════════════
     // GET DEVICE INFO
-    // Returns full device information
     // ════════════════════════════════════════════════════════
     private void getDeviceInfo(CallbackContext callbackContext) {
         cordova.getThreadPool().execute(() -> {
@@ -912,27 +1040,20 @@ public class EnterpriseAppStore extends CordovaPlugin {
                 Context context = cordova.getContext();
                 JSONObject result = new JSONObject();
 
-                // Hardware info
                 result.put("manufacturer",   Build.MANUFACTURER);
                 result.put("brand",          Build.BRAND);
                 result.put("model",          Build.MODEL);
                 result.put("device",         Build.DEVICE);
                 result.put("product",        Build.PRODUCT);
-
-                // OS info
                 result.put("androidVersion", Build.VERSION.RELEASE);
                 result.put("sdkVersion",     Build.VERSION.SDK_INT);
 
-                
                 String androidId = Settings.Secure.getString(
-                    cordova.getContext().getContentResolver(),
+                    context.getContentResolver(),
                     Settings.Secure.ANDROID_ID
                 );
-
                 result.put("uuid", androidId);
 
-
-                // App info
                 try {
                     android.content.pm.PackageInfo pkgInfo =
                             context.getPackageManager()
@@ -948,29 +1069,20 @@ public class EnterpriseAppStore extends CordovaPlugin {
                     result.put("packageName", context.getPackageName());
                 }
 
-                // Screen info
-                DisplayMetrics dm =
-                        context.getResources().getDisplayMetrics();
+                DisplayMetrics dm = context.getResources().getDisplayMetrics();
                 result.put("screenWidth",    dm.widthPixels);
                 result.put("screenHeight",   dm.heightPixels);
                 result.put("screenDensity",  dm.densityDpi);
 
-                // Locale & Timezone
                 result.put("locale",   Locale.getDefault().toString());
                 result.put("timezone", TimeZone.getDefault().getID());
 
-                // Battery
-                IntentFilter ifilter = new IntentFilter(
-                        Intent.ACTION_BATTERY_CHANGED);
-                Intent batteryStatus =
-                        context.registerReceiver(null, ifilter);
+                IntentFilter ifilter = new IntentFilter(Intent.ACTION_BATTERY_CHANGED);
+                Intent batteryStatus = context.registerReceiver(null, ifilter);
                 if (batteryStatus != null) {
-                    int level  = batteryStatus.getIntExtra(
-                            BatteryManager.EXTRA_LEVEL, -1);
-                    int scale  = batteryStatus.getIntExtra(
-                            BatteryManager.EXTRA_SCALE, -1);
-                    int bStatus = batteryStatus.getIntExtra(
-                            BatteryManager.EXTRA_STATUS, -1);
+                    int level  = batteryStatus.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
+                    int scale  = batteryStatus.getIntExtra(BatteryManager.EXTRA_SCALE, -1);
+                    int bStatus = batteryStatus.getIntExtra(BatteryManager.EXTRA_STATUS, -1);
                     int batteryPct = (scale > 0)
                             ? (int)((level / (float) scale) * 100) : -1;
                     boolean isCharging =
@@ -983,7 +1095,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
                     result.put("isCharging",   false);
                 }
 
-                // Storage
                 StatFs stat = new StatFs(
                         Environment.getExternalStorageDirectory().getPath());
                 long blockSize    = stat.getBlockSizeLong();
@@ -993,10 +1104,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
                         (availBlocks * blockSize) / (1024 * 1024));
                 result.put("totalStorageMB",
                         (totalBlocks * blockSize) / (1024 * 1024));
-
-                Log.d(TAG, "getDeviceInfo: "
-                        + Build.MANUFACTURER + " " + Build.MODEL
-                        + " Android " + Build.VERSION.RELEASE);
 
                 callbackContext.success(result);
 
@@ -1009,9 +1116,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
 
     // ════════════════════════════════════════════════════════
     // CHECK UPDATE
-    // Compare installed version vs latest version from server
-    // Returns: { needsUpdate, installedVersion, latestVersion,
-    //            packageName, isInstalled }
     // ════════════════════════════════════════════════════════
     private void checkUpdate(String packageName, String latestVersion,
                              CallbackContext callbackContext) {
@@ -1034,17 +1138,10 @@ public class EnterpriseAppStore extends CordovaPlugin {
                 result.put("installedVersion", installedVersion);
                 result.put("needsUpdate",      needsUpdate);
 
-                Log.d(TAG, "checkUpdate: " + packageName
-                        + " installed=" + installedVersion
-                        + " latest="    + latestVersion
-                        + " needsUpdate=" + needsUpdate);
-
             } catch (android.content.pm.PackageManager.NameNotFoundException e) {
-                // App not installed — needs install
                 result.put("isInstalled",      false);
                 result.put("installedVersion", "");
                 result.put("needsUpdate",      true);
-                Log.d(TAG, "checkUpdate: " + packageName + " not installed");
             }
 
             callbackContext.success(result);
@@ -1054,13 +1151,10 @@ public class EnterpriseAppStore extends CordovaPlugin {
         }
     }
 
-    // ── Helper: Compare semantic versions ────────────────────
-    // Returns: -1 (v1 < v2), 0 (equal), 1 (v1 > v2)
     private int compareVersions(String v1, String v2) {
         if (v1 == null) v1 = "0";
         if (v2 == null) v2 = "0";
 
-        // Remove non-numeric prefix e.g. "v1.2.3" → "1.2.3"
         v1 = v1.replaceAll("[^0-9.]", "");
         v2 = v2.replaceAll("[^0-9.]", "");
 
@@ -1093,7 +1187,7 @@ public class EnterpriseAppStore extends CordovaPlugin {
                             .getSystemService(Context.DOWNLOAD_SERVICE);
             dm.remove(downloadId);
 
-            if (progressHandler != null) {
+            if (progressHandler != null && progressRunnable != null) {
                 progressHandler.removeCallbacks(progressRunnable);
             }
 
