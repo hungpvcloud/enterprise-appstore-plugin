@@ -27,31 +27,25 @@
     ============================================================ -->
     <platform name="android">
 
-        <!-- AndroidX dependencies required for FileProvider and DownloadManager -->
         <framework src="androidx.core:core:1.9.0" />
         <framework src="androidx.appcompat:appcompat:1.6.1" />
 
-        <!-- Required permissions -->
+        <!-- ✅ PERMISSIONS - Optimize for Scoped Storage -->
         <config-file target="AndroidManifest.xml" parent="/*">
-            <!-- Network access for downloading APK files -->
             <uses-permission android:name="android.permission.INTERNET" />
-            <!-- Required to install APK files programmatically -->
             <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
-            <!-- Required on Android 11+ to query other installed packages
-                 Used by: isAppInstalled(), getAppVersion(), checkUpdate(), openApp() -->
             <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
-            <!-- External storage write access (Android 9 and below only) -->
+            
+            <!-- Legacy permissions for Android 9 down -->
             <uses-permission
                 android:name="android.permission.WRITE_EXTERNAL_STORAGE"
                 android:maxSdkVersion="28" />
-            <!-- External storage read access (Android 12 and below only) -->
             <uses-permission
                 android:name="android.permission.READ_EXTERNAL_STORAGE"
                 android:maxSdkVersion="32" />
         </config-file>
 
-        <!-- Register custom FileProvider to serve APK files via content:// URI.
-             Uses a dedicated subclass to avoid authority conflicts with other plugins. -->
+        <!-- FileProvider -->
         <config-file target="AndroidManifest.xml" parent="application">
             <provider
                 android:name="com.enterprise.appstore.EnterpriseAppStoreFileProvider"
@@ -64,7 +58,7 @@
             </provider>
         </config-file>
 
-        <!-- Register plugin feature with Cordova -->
+        <!-- Cordova feature -->
         <config-file target="res/xml/config.xml" parent="/*">
             <feature name="EnterpriseAppStore">
                 <param name="android-package"
@@ -80,7 +74,7 @@
             src="src/android/EnterpriseAppStoreFileProvider.java"
             target-dir="src/com/enterprise/appstore" />
 
-        <!-- FileProvider path configuration (defines accessible directories) -->
+        <!-- FileProvider paths config -->
         <resource-file
             src="res/android/xml/enterprise_appstore_paths.xml"
             target="res/xml/enterprise_appstore_paths.xml" />
