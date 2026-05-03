@@ -82,4 +82,5 @@
  */
 - (void)openApp:(CDVInvokedUrlCommand *)command;
 
+- (void)setBadgeNumber:(CDVInvokedUrlCommand *)command;
 @end
