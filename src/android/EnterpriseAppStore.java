@@ -30,6 +30,9 @@ import java.io.File;
 import java.io.InputStreamReader;
 import java.util.Locale;
 import java.util.TimeZone;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
+import java.util.List;
 
 public class EnterpriseAppStore extends CordovaPlugin {
 
@@ -1316,8 +1319,7 @@ public class EnterpriseAppStore extends CordovaPlugin {
         Intent intent = new Intent(Intent.ACTION_MAIN);
         intent.addCategory(Intent.CATEGORY_LAUNCHER);
 
-        List<ResolveInfo> resolveInfos =
-                pm.queryIntentActivities(intent, 0);
+        List<ResolveInfo> resolveInfos = pm.queryIntentActivities(intent, 0);
 
         for (ResolveInfo resolveInfo : resolveInfos) {
             if (resolveInfo.activityInfo.packageName
