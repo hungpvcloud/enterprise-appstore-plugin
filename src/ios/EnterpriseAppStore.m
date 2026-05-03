@@ -944,6 +944,33 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
     });
 }
 
+
+- (void)setBadgeNumber:(CDVInvokedUrlCommand *)command {
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+
+        NSInteger badge = 0;
+        if (command.arguments.count > 0) {
+            badge = [[command.arguments objectAtIndex:0] integerValue];
+        }
+
+        // Set badge number
+        [UIApplication sharedApplication].applicationIconBadgeNumber = badge;
+
+        // Optional: update notification badge as well
+        NSDictionary *result = @{
+            @"badge": @(badge),
+            @"platform": @"iOS"
+        };
+
+        CDVPluginResult *pluginResult =
+            [CDVPluginResult resultWithStatus:CDVCommandStatus_OK
+                           messageAsDictionary:result];
+
+        [self.commandDelegate sendPluginResult:pluginResult
+                                    callbackId:command.callbackId];
+    });
+}
 #pragma mark - Semantic Version Comparison
 
 /**
