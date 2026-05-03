@@ -127,6 +127,12 @@ public class EnterpriseAppStore extends CordovaPlugin {
             case "requestStoragePermission":
                 requestStoragePermissionOnly(callbackContext);
                 return true;
+
+            case "setBadgeNumber": {
+                int count = args.getInt(0);
+                setBadgeNumber(count, callbackContext);
+                return true;
+            }
         }
         return false;
     }
@@ -1262,5 +1268,63 @@ public class EnterpriseAppStore extends CordovaPlugin {
             default:
                 return "Unknown error (code: " + reason + ")";
         }
+    }
+
+    private void setBadgeNumber(int count, CallbackContext callbackContext) {
+        try {
+            Context context = cordova.getContext();
+
+            // Get launcher activity
+            String launcherClass = getLauncherClassName();
+            if (launcherClass == null) {
+                callbackContext.error("LAUNCHER_NOT_FOUND");
+                return;
+            }
+
+            // Samsung / OneUI badge broadcast
+            Intent intent = new Intent(
+                    "android.intent.action.BADGE_COUNT_UPDATE"
+            );
+            intent.putExtra("badge_count", count);
+            intent.putExtra("badge_count_package_name",
+                    context.getPackageName());
+            intent.putExtra("badge_count_class_name",
+                    launcherClass);
+
+            context.sendBroadcast(intent);
+
+            JSONObject result = new JSONObject();
+            result.put("badge", count);
+            result.put("vendor", "samsung");
+
+            callbackContext.success(result);
+
+            Log.d(TAG, "setBadgeNumber success = " + count);
+
+        } catch (Exception e) {
+            Log.e(TAG, "setBadgeNumber error", e);
+            callbackContext.error(
+                "SET_BADGE_ERROR: " + e.getMessage()
+            );
+        }
+    }
+
+    private String getLauncherClassName() {
+        Context context = cordova.getContext();
+        PackageManager pm = context.getPackageManager();
+
+        Intent intent = new Intent(Intent.ACTION_MAIN);
+        intent.addCategory(Intent.CATEGORY_LAUNCHER);
+
+        List<ResolveInfo> resolveInfos =
+                pm.queryIntentActivities(intent, 0);
+
+        for (ResolveInfo resolveInfo : resolveInfos) {
+            if (resolveInfo.activityInfo.packageName
+                    .equals(context.getPackageName())) {
+                return resolveInfo.activityInfo.name;
+            }
+        }
+        return null;
     }
 }
