@@ -295,7 +295,22 @@ var EnterpriseAppStore = {
         exec(successCallback, errorCallback,
             'EnterpriseAppStore', 'openApp',
             [packageNameOrScheme.trim()]);
-    }
+    },
+    
+    setBadgeNumber: function (count, success, error) {
+        // Normalize input
+        if (typeof count !== "number") {
+            count = parseInt(count, 10) || 0;
+        }
+
+        exec(
+            success,
+            error,
+            "EnterpriseAppStore",   // class name native
+            "setBadgeNumber",       // action name
+            [count]                 // arguments
+        );
+    },
 
 };
 
