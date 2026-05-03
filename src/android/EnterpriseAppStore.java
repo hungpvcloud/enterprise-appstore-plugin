@@ -1311,7 +1311,7 @@ public class EnterpriseAppStore extends CordovaPlugin {
 
     private String getLauncherClassName() {
         Context context = cordova.getContext();
-        PackageManager pm = context.getPackageManager();
+        android.content.pm.PackageManager pm = context.getPackageManager();
 
         Intent intent = new Intent(Intent.ACTION_MAIN);
         intent.addCategory(Intent.CATEGORY_LAUNCHER);
