@@ -13,6 +13,9 @@
  *                          UUID (Keychain)
  *   - checkUpdate        : Compare installed vs latest version
  *   - openApp            : Launch another app by URL scheme
+ *   - setBadgeNumber     : Set app icon badge number
+ *                          (iOS 10-18+ compatible with auto
+ *                          notification permission handling)
  *
  * Model Name Resolution (3-Layer Automatic):
  *   Layer 1: Local Cache (NSUserDefaults)
@@ -21,11 +24,18 @@
  *
  * UUID Strategy:
  *   Keychain-backed for persistence across app reinstalls.
+ *
+ * Badge Strategy (iOS version-aware):
+ *   iOS 16+:  UNUserNotificationCenter.setBadgeCount
+ *   iOS 10-15: UIApplication.applicationIconBadgeNumber
+ *   Auto-requests provisional notification authorization
+ *   for badge visibility on iOS 16+.
  ****************************************************************/
 
 #import <Cordova/CDV.h>
 #import <UIKit/UIKit.h>
 #import <Security/Security.h>
+#import <UserNotifications/UserNotifications.h>
 
 @interface EnterpriseAppStore : CDVPlugin
 
@@ -82,5 +92,28 @@
  */
 - (void)openApp:(CDVInvokedUrlCommand *)command;
 
+/**
+ * Sets the app icon badge number with full iOS version compatibility.
+ *
+ * Automatically handles notification permission and uses the
+ * appropriate API based on iOS version:
+ *   - iOS 16+:  UNUserNotificationCenter.setBadgeCount (modern API)
+ *   - iOS 10-15: UIApplication.applicationIconBadgeNumber (legacy)
+ *
+ * On first call with iOS 16+, requests provisional notification
+ * authorization silently (no dialog shown to user) to enable badge.
+ *
+ * @param command.arguments[0] count — badge number (0 to clear)
+ * @return {
+ *   badge:              number,
+ *   platform:           "ios",
+ *   method:             "setBadgeCount" | "applicationIconBadgeNumber",
+ *   notificationStatus: "authorized" | "provisional" | "denied" | "notDetermined",
+ *   iosVersion:         string,
+ *   success:            bool,
+ *   errorMessage:       string (optional, only on error)
+ * }
+ */
 - (void)setBadgeNumber:(CDVInvokedUrlCommand *)command;
+
 @end
