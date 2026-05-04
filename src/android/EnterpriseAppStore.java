@@ -1,6 +1,11 @@
 package com.enterprise.appstore;
 
 import android.app.DownloadManager;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.content.ComponentName;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -16,7 +21,11 @@ import android.provider.Settings;
 import android.util.DisplayMetrics;
 import android.util.Log;
 
+import androidx.core.app.NotificationCompat;
+import androidx.core.app.NotificationManagerCompat;
 import androidx.core.content.FileProvider;
+import androidx.core.content.pm.ShortcutInfoCompat;
+import androidx.core.content.pm.ShortcutManagerCompat;
 
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaPlugin;
@@ -44,6 +53,11 @@ public class EnterpriseAppStore extends CordovaPlugin {
     private static final int    REQUEST_STORAGE_PERM = 1002;
     private static final int    POLL_INTERVAL_MS     = 800;
     private static final int    MAX_POLL_COUNT       = 1500; // ~20 min
+
+    // Badge notification channel & ID
+    private static final String BADGE_CHANNEL_ID     = "badge_channel";
+    private static final String BADGE_CHANNEL_NAME   = "App Badge";
+    private static final int    BADGE_NOTIFICATION_ID = 9999;
 
     // Download state
     private long            downloadId       = -1;
@@ -145,14 +159,12 @@ public class EnterpriseAppStore extends CordovaPlugin {
     // ════════════════════════════════════════════════════════
     private boolean hasStoragePermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            // Android 11+ cần MANAGE_EXTERNAL_STORAGE
             return Environment.isExternalStorageManager();
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            // Android 6-10 cần WRITE_EXTERNAL_STORAGE
             return cordova.hasPermission(
                     android.Manifest.permission.WRITE_EXTERNAL_STORAGE);
         }
-        return true; // Android 5 trở xuống không cần runtime permission
+        return true;
     }
 
     private void checkStoragePermission(CallbackContext callbackContext) {
@@ -188,19 +200,18 @@ public class EnterpriseAppStore extends CordovaPlugin {
 
     private void requestStoragePermissionInternal() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            // Android 11+: Mở Settings để grant MANAGE_EXTERNAL_STORAGE
             try {
                 Intent intent = new Intent(
                         Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
-                intent.setData(Uri.parse("package:" 
+                intent.setData(Uri.parse("package:"
                         + cordova.getContext().getPackageName()));
-                
+
                 cordova.setActivityResultCallback(this);
                 cordova.getActivity().startActivityForResult(
                         intent, REQUEST_STORAGE_PERM);
-                
+
                 Log.d(TAG, "Opening storage permission settings for Android 11+");
-                
+
             } catch (Exception e) {
                 Log.e(TAG, "Cannot open storage settings", e);
                 if (pendingInstallCallback != null) {
@@ -210,32 +221,29 @@ public class EnterpriseAppStore extends CordovaPlugin {
                 }
             }
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            // Android 6-10: Request runtime permission
             cordova.requestPermissions(this, REQUEST_STORAGE_PERM,
                     new String[]{android.Manifest.permission.WRITE_EXTERNAL_STORAGE});
-            
+
             Log.d(TAG, "Requesting WRITE_EXTERNAL_STORAGE for Android 6-10");
         }
     }
 
     @Override
-    public void onRequestPermissionsResult(int requestCode, 
+    public void onRequestPermissionsResult(int requestCode,
                                           String[] permissions,
                                           int[] grantResults) {
         if (requestCode == REQUEST_STORAGE_PERM) {
-            boolean granted = grantResults.length > 0 
+            boolean granted = grantResults.length > 0
                     && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED;
-            
+
             Log.d(TAG, "Storage permission result: " + granted);
-            
+
             if (granted) {
                 if (pendingInstallCallback != null) {
                     if (pendingInstallUrl != null && !pendingInstallUrl.isEmpty()) {
-                        // Resume download
-                        downloadAndInstall(pendingInstallUrl, 
+                        downloadAndInstall(pendingInstallUrl,
                                 pendingInstallFileName, pendingInstallCallback);
                     } else {
-                        // Just permission check
                         try {
                             JSONObject result = new JSONObject();
                             result.put("status", "PERMISSION_GRANTED");
@@ -253,8 +261,7 @@ public class EnterpriseAppStore extends CordovaPlugin {
                             "", false);
                 }
             }
-            
-            // Reset
+
             if (pendingInstallUrl == null) {
                 pendingInstallCallback = null;
             }
@@ -265,7 +272,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
 
     // ════════════════════════════════════════════════════════
     // DOWNLOAD AND INSTALL
-    // Uses app-specific directory (no permission needed)
     // ════════════════════════════════════════════════════════
     private void downloadAndInstall(String url, String fileName,
                                     CallbackContext callbackContext) {
@@ -278,24 +284,20 @@ public class EnterpriseAppStore extends CordovaPlugin {
                 DownloadManager dm = (DownloadManager)
                         context.getSystemService(Context.DOWNLOAD_SERVICE);
 
-                // ✅ SOLUTION: Use app-specific external files directory
-                // No WRITE_EXTERNAL_STORAGE permission needed!
                 File downloadDir = new File(context.getExternalFilesDir(null), "Downloads");
                 if (!downloadDir.exists()) {
                     boolean created = downloadDir.mkdirs();
-                    Log.d(TAG, "Created download dir: " + created 
+                    Log.d(TAG, "Created download dir: " + created
                             + " - " + downloadDir.getAbsolutePath());
                 }
 
-                // Remove old APK if exists
                 File apkFile = new File(downloadDir, fileName);
                 if (apkFile.exists()) {
                     boolean deleted = apkFile.delete();
-                    Log.d(TAG, "Deleted old APK: " + deleted 
+                    Log.d(TAG, "Deleted old APK: " + deleted
                             + " - " + apkFile.getAbsolutePath());
                 }
 
-                // Configure DownloadManager request
                 DownloadManager.Request request =
                         new DownloadManager.Request(Uri.parse(url));
                 request.setTitle(fileName);
@@ -303,8 +305,7 @@ public class EnterpriseAppStore extends CordovaPlugin {
                 request.setMimeType("application/vnd.android.package-archive");
                 request.setNotificationVisibility(
                         DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-                
-                // ✅ Save to app-specific directory using Uri
+
                 request.setDestinationUri(Uri.fromFile(apkFile));
 
                 downloadId = dm.enqueue(request);
@@ -313,11 +314,9 @@ public class EnterpriseAppStore extends CordovaPlugin {
                         + " id=" + downloadId
                         + " file=" + apkFile.getAbsolutePath());
 
-                // Initial status
                 sendStatus(callbackContext,
                         "DOWNLOADING", 0, "Download started...", "", true);
 
-                // Start polling loop
                 startPolling(dm, apkFile, callbackContext);
 
             } catch (Exception e) {
@@ -329,8 +328,7 @@ public class EnterpriseAppStore extends CordovaPlugin {
     }
 
     // ════════════════════════════════════════════════════════
-    // POLLING — Query DownloadManager every 800ms
-    // Replaces BroadcastReceiver for Xiaomi HyperOS
+    // POLLING
     // ════════════════════════════════════════════════════════
     private void startPolling(DownloadManager dm, File apkFile,
                               CallbackContext callbackContext) {
@@ -344,7 +342,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
                     return;
                 }
 
-                // Timeout check
                 pollCount++;
                 if (pollCount > MAX_POLL_COUNT) {
                     Log.e(TAG, "Download TIMEOUT after " + pollCount + " polls");
@@ -354,7 +351,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
                     return;
                 }
 
-                // Query DownloadManager
                 DownloadManager.Query query = new DownloadManager.Query();
                 query.setFilterById(downloadId);
                 Cursor cursor = dm.query(query);
@@ -421,7 +417,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
                         Log.d(TAG, "exists   = " + realFile.exists());
                         Log.d(TAG, "size     = " + realFile.length() + " bytes");
 
-                        // Stop polling
                         downloadId = -1;
 
                         if (!realFile.exists() || realFile.length() == 0) {
@@ -432,13 +427,11 @@ public class EnterpriseAppStore extends CordovaPlugin {
                             return;
                         }
 
-                        // Send DOWNLOAD_COMPLETE with real filePath
                         sendStatus(callbackContext,
                                 "DOWNLOAD_COMPLETE", 100,
                                 "Download complete. Starting installation...",
                                 filePath, true);
 
-                        // Run installApk on UI thread
                         final File   finalFile = realFile;
                         final String finalPath = filePath;
                         cordova.getActivity().runOnUiThread(() -> {
@@ -474,7 +467,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
     // RESOLVE DOWNLOADED FILE PATH
     // ════════════════════════════════════════════════════════
     private File resolveDownloadedFile(String localUri, File fallbackFile) {
-        // Method 1: Parse from DownloadManager localUri
         if (localUri != null && !localUri.isEmpty()) {
             try {
                 Uri uri = Uri.parse(localUri);
@@ -491,7 +483,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
             }
         }
 
-        // Method 2: Use fallback file object (should exist!)
         if (fallbackFile != null && fallbackFile.exists()) {
             Log.d(TAG, "Using fallback: " + fallbackFile.getAbsolutePath());
             return fallbackFile;
@@ -508,7 +499,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
                             CallbackContext callbackContext) {
         Log.d(TAG, "installApk() called: " + filePath);
 
-        // Verify file exists
         if (apkFile == null || !apkFile.exists()) {
             Log.e(TAG, "APK file not found: " + filePath);
             sendStatus(callbackContext, "ERROR", 0,
@@ -520,12 +510,10 @@ public class EnterpriseAppStore extends CordovaPlugin {
 
         Context context = cordova.getContext();
 
-        // Check REQUEST_INSTALL_PACKAGES permission (Android 8+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             if (!context.getPackageManager().canRequestPackageInstalls()) {
                 Log.w(TAG, "No INSTALL permission — opening Settings...");
 
-                // Save pending state to resume after Settings
                 pendingApkFile         = apkFile;
                 pendingFilePath        = filePath;
                 pendingInstallCallback = callbackContext;
@@ -546,7 +534,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
             }
         }
 
-        // Launch install intent
         try {
             Intent intent = new Intent(Intent.ACTION_VIEW);
             intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK
@@ -573,7 +560,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
             context.startActivity(intent);
             Log.d(TAG, "Install activity started ✅");
 
-            // Final callback — keepCallback=false → JS will $resolve()
             sendStatus(callbackContext, "INSTALL_PROMPT", 100,
                     "Installation dialog opened.", filePath, false);
 
@@ -585,7 +571,7 @@ public class EnterpriseAppStore extends CordovaPlugin {
     }
 
     // ════════════════════════════════════════════════════════
-    // ON ACTIVITY RESULT — Called when user returns from Settings
+    // ON ACTIVITY RESULT
     // ════════════════════════════════════════════════════════
     @Override
     public void onActivityResult(int requestCode, int resultCode,
@@ -609,7 +595,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
                         "Permission granted. Resuming...", "", true);
 
                 if (pendingApkFile != null && pendingApkFile.exists()) {
-                    // File already downloaded — install directly
                     Log.d(TAG, "Resume install: " + pendingApkFile.getName());
                     final File   f  = pendingApkFile;
                     final String p  = pendingFilePath;
@@ -619,7 +604,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
 
                 } else if (pendingInstallUrl != null
                         && !pendingInstallUrl.isEmpty()) {
-                    // Not downloaded yet — start download + install
                     Log.d(TAG, "Resume download: " + pendingInstallFileName);
                     downloadAndInstall(pendingInstallUrl,
                             pendingInstallFileName, pendingInstallCallback);
@@ -632,7 +616,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
                         "", false);
             }
 
-            // Reset pending install state
             pendingInstallUrl      = null;
             pendingInstallFileName = null;
             pendingInstallCallback = null;
@@ -640,7 +623,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
             pendingFilePath        = null;
         }
         else if (requestCode == REQUEST_STORAGE_PERM) {
-            // Handle storage permission result (Android 11+)
             boolean hasPermission = false;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 hasPermission = Environment.isExternalStorageManager();
@@ -655,11 +637,9 @@ public class EnterpriseAppStore extends CordovaPlugin {
 
             if (hasPermission) {
                 if (pendingInstallUrl != null && !pendingInstallUrl.isEmpty()) {
-                    // Resume download
-                    downloadAndInstall(pendingInstallUrl, 
+                    downloadAndInstall(pendingInstallUrl,
                             pendingInstallFileName, pendingInstallCallback);
                 } else {
-                    // Just permission check
                     try {
                         JSONObject result = new JSONObject();
                         result.put("status", "PERMISSION_GRANTED");
@@ -677,7 +657,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
                 pendingInstallCallback = null;
             }
 
-            // Reset storage permission state
             if (pendingInstallUrl == null) {
                 pendingInstallUrl = null;
                 pendingInstallFileName = null;
@@ -753,15 +732,12 @@ public class EnterpriseAppStore extends CordovaPlugin {
 
     // ════════════════════════════════════════════════════════
     // OPEN APP
-    // Launch an installed app by its package name
-    // Returns: { success, packageName, message }
     // ════════════════════════════════════════════════════════
     private void openApp(String packageName, CallbackContext callbackContext) {
         try {
             Context context = cordova.getContext();
             android.content.pm.PackageManager pm = context.getPackageManager();
 
-            // Step 1: Verify the app is installed
             try {
                 pm.getPackageInfo(packageName, 0);
             } catch (android.content.pm.PackageManager.NameNotFoundException e) {
@@ -779,7 +755,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
                 return;
             }
 
-            // Step 2: Get the launch intent for the package
             Intent launchIntent = pm.getLaunchIntentForPackage(packageName);
 
             if (launchIntent == null) {
@@ -797,7 +772,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
                 return;
             }
 
-            // Step 3: Configure and launch the intent
             launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
                                 | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
 
@@ -805,7 +779,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
 
             Log.d(TAG, "openApp: Successfully launched " + packageName + " ✅");
 
-            // Step 4: Return success
             JSONObject result = new JSONObject();
             result.put("success",     true);
             result.put("packageName", packageName);
@@ -853,7 +826,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
 
     // ════════════════════════════════════════════════════════
     // GET APP VERSION
-    // Returns: { packageName, versionName, versionCode }
     // ════════════════════════════════════════════════════════
     private void getAppVersion(String packageName,
                                CallbackContext callbackContext) {
@@ -885,7 +857,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
 
     // ════════════════════════════════════════════════════════
     // IS APP INSTALLED
-    // Returns: { isInstalled, packageName, versionName, versionCode }
     // ════════════════════════════════════════════════════════
     private void isAppInstalled(String packageName,
                                 CallbackContext callbackContext) {
@@ -925,8 +896,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
 
     // ════════════════════════════════════════════════════════
     // CHECK APP SHIELD
-    // Returns: { isRooted, isDeveloperMode, isUsbDebugging,
-    //            isEmulator, isInstalledFromStore, isSafe }
     // ════════════════════════════════════════════════════════
     private void checkAppShield(CallbackContext callbackContext) {
         cordova.getThreadPool().execute(() -> {
@@ -1208,6 +1177,710 @@ public class EnterpriseAppStore extends CordovaPlugin {
     }
 
     // ════════════════════════════════════════════════════════
+    // SET BADGE NUMBER — Multi-vendor compatible
+    // Supports: Samsung, Huawei, Xiaomi, OPPO, vivo, ZTE,
+    //           Sony, HTC, ASUS, and standard Android 8+ badge
+    // ════════════════════════════════════════════════════════
+
+    /**
+     * Main entry point for setting the badge number.
+     * Uses a multi-strategy approach:
+     *   1. Android 8+ Notification Badge (standard, works on most devices)
+     *   2. Vendor-specific broadcast intents (for launchers that use them)
+     *   3. Fallback strategies for maximum compatibility
+     */
+    private void setBadgeNumber(int count, CallbackContext callbackContext) {
+        try {
+            Context context = cordova.getContext();
+            String packageName = context.getPackageName();
+
+            // Resolve launcher activity class name
+            String launcherClass = getLauncherClassName();
+            if (launcherClass == null) {
+                Log.e(TAG, "setBadgeNumber: launcher class not found");
+                callbackContext.error("LAUNCHER_NOT_FOUND");
+                return;
+            }
+
+            String manufacturer = Build.MANUFACTURER.toLowerCase(Locale.ROOT);
+            Log.d(TAG, "setBadgeNumber: count=" + count
+                    + " manufacturer=" + manufacturer
+                    + " pkg=" + packageName
+                    + " launcher=" + launcherClass);
+
+            // Track which strategies succeeded
+            JSONArray appliedStrategies = new JSONArray();
+            boolean anySuccess = false;
+
+            // ─────────────────────────────────────────────
+            // Strategy 1: Android 8+ Notification Badge
+            // This is the STANDARD method and works on most
+            // modern devices including Samsung S25 (OneUI 7)
+            // ─────────────────────────────────────────────
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                try {
+                    setNotificationBadge(context, count);
+                    appliedStrategies.put("notification_badge");
+                    anySuccess = true;
+                    Log.d(TAG, "setBadgeNumber: notification badge set ✅");
+                } catch (Exception e) {
+                    Log.w(TAG, "setBadgeNumber: notification badge failed: "
+                            + e.getMessage());
+                }
+            }
+
+            // ─────────────────────────────────────────────
+            // Strategy 2: Vendor-specific broadcast intents
+            // ─────────────────────────────────────────────
+
+            // Samsung (all versions including OneUI 6/7)
+            if (manufacturer.contains("samsung")) {
+                try {
+                    setBadgeSamsung(context, count, packageName, launcherClass);
+                    appliedStrategies.put("samsung");
+                    anySuccess = true;
+                } catch (Exception e) {
+                    Log.w(TAG, "setBadgeNumber: samsung method failed: "
+                            + e.getMessage());
+                }
+            }
+
+            // Huawei / Honor
+            else if (manufacturer.contains("huawei")
+                    || manufacturer.contains("honor")) {
+                try {
+                    setBadgeHuawei(context, count, packageName, launcherClass);
+                    appliedStrategies.put("huawei");
+                    anySuccess = true;
+                } catch (Exception e) {
+                    Log.w(TAG, "setBadgeNumber: huawei method failed: "
+                            + e.getMessage());
+                }
+            }
+
+            // Xiaomi / Redmi / POCO
+            else if (manufacturer.contains("xiaomi")
+                    || manufacturer.contains("redmi")
+                    || manufacturer.contains("poco")) {
+                try {
+                    setBadgeXiaomi(context, count, packageName, launcherClass);
+                    appliedStrategies.put("xiaomi");
+                    anySuccess = true;
+                } catch (Exception e) {
+                    Log.w(TAG, "setBadgeNumber: xiaomi method failed: "
+                            + e.getMessage());
+                }
+            }
+
+            // OPPO / Realme / OnePlus (ColorOS / OxygenOS)
+            else if (manufacturer.contains("oppo")
+                    || manufacturer.contains("realme")
+                    || manufacturer.contains("oneplus")) {
+                try {
+                    setBadgeOPPO(context, count, packageName, launcherClass);
+                    appliedStrategies.put("oppo");
+                    anySuccess = true;
+                } catch (Exception e) {
+                    Log.w(TAG, "setBadgeNumber: oppo method failed: "
+                            + e.getMessage());
+                }
+            }
+
+            // vivo / iQOO
+            else if (manufacturer.contains("vivo")
+                    || manufacturer.contains("iqoo")) {
+                try {
+                    setBadgeVivo(context, count, packageName, launcherClass);
+                    appliedStrategies.put("vivo");
+                    anySuccess = true;
+                } catch (Exception e) {
+                    Log.w(TAG, "setBadgeNumber: vivo method failed: "
+                            + e.getMessage());
+                }
+            }
+
+            // ZTE
+            else if (manufacturer.contains("zte")) {
+                try {
+                    setBadgeZTE(context, count, packageName, launcherClass);
+                    appliedStrategies.put("zte");
+                    anySuccess = true;
+                } catch (Exception e) {
+                    Log.w(TAG, "setBadgeNumber: zte method failed: "
+                            + e.getMessage());
+                }
+            }
+
+            // Sony
+            else if (manufacturer.contains("sony")) {
+                try {
+                    setBadgeSony(context, count, packageName, launcherClass);
+                    appliedStrategies.put("sony");
+                    anySuccess = true;
+                } catch (Exception e) {
+                    Log.w(TAG, "setBadgeNumber: sony method failed: "
+                            + e.getMessage());
+                }
+            }
+
+            // HTC
+            else if (manufacturer.contains("htc")) {
+                try {
+                    setBadgeHTC(context, count, packageName, launcherClass);
+                    appliedStrategies.put("htc");
+                    anySuccess = true;
+                } catch (Exception e) {
+                    Log.w(TAG, "setBadgeNumber: htc method failed: "
+                            + e.getMessage());
+                }
+            }
+
+            // ASUS
+            else if (manufacturer.contains("asus")) {
+                try {
+                    setBadgeASUS(context, count, packageName, launcherClass);
+                    appliedStrategies.put("asus");
+                    anySuccess = true;
+                } catch (Exception e) {
+                    Log.w(TAG, "setBadgeNumber: asus method failed: "
+                            + e.getMessage());
+                }
+            }
+
+            // ─────────────────────────────────────────────
+            // Strategy 3: Generic fallback broadcast
+            // Some third-party launchers (Nova, Action, etc.)
+            // listen to the generic BadgeProvider
+            // ─────────────────────────────────────────────
+            try {
+                setBadgeGenericBroadcast(context, count,
+                        packageName, launcherClass);
+                appliedStrategies.put("generic_broadcast");
+                anySuccess = true;
+            } catch (Exception e) {
+                Log.w(TAG, "setBadgeNumber: generic broadcast failed: "
+                        + e.getMessage());
+            }
+
+            // ─────────────────────────────────────────────
+            // Build response
+            // ─────────────────────────────────────────────
+            JSONObject result = new JSONObject();
+            result.put("badge", count);
+            result.put("manufacturer", Build.MANUFACTURER);
+            result.put("model", Build.MODEL);
+            result.put("sdkVersion", Build.VERSION.SDK_INT);
+            result.put("strategies", appliedStrategies);
+            result.put("success", anySuccess);
+
+            if (anySuccess) {
+                callbackContext.success(result);
+                Log.d(TAG, "setBadgeNumber: success, count=" + count
+                        + " strategies=" + appliedStrategies.toString());
+            } else {
+                result.put("error", "No badge strategy worked for this device");
+                callbackContext.error(result);
+                Log.e(TAG, "setBadgeNumber: all strategies failed");
+            }
+
+        } catch (Exception e) {
+            Log.e(TAG, "setBadgeNumber error", e);
+            callbackContext.error(
+                "SET_BADGE_ERROR: " + e.getMessage()
+            );
+        }
+    }
+
+    // ════════════════════════════════════════════════════════
+    // BADGE STRATEGY: Android 8+ Notification Badge
+    // This is the most reliable method for modern Android.
+    // The system reads the notification count and displays
+    // it as a badge dot or number (depending on launcher).
+    // Samsung OneUI 6+ and Google Pixel fully support this.
+    // ════════════════════════════════════════════════════════
+    private void setNotificationBadge(Context context, int count) {
+        NotificationManager notificationManager =
+                (NotificationManager) context.getSystemService(
+                        Context.NOTIFICATION_SERVICE);
+
+        if (count <= 0) {
+            // Remove badge by cancelling the notification
+            notificationManager.cancel(BADGE_NOTIFICATION_ID);
+            Log.d(TAG, "Notification badge cleared");
+            return;
+        }
+
+        // Create notification channel (required for Android 8+)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel channel = notificationManager
+                    .getNotificationChannel(BADGE_CHANNEL_ID);
+
+            if (channel == null) {
+                channel = new NotificationChannel(
+                        BADGE_CHANNEL_ID,
+                        BADGE_CHANNEL_NAME,
+                        NotificationManager.IMPORTANCE_DEFAULT
+                );
+                // Enable badge for this channel
+                channel.setShowBadge(true);
+                // Minimize visual/audio disturbance
+                channel.setSound(null, null);
+                channel.enableVibration(false);
+                channel.enableLights(false);
+                notificationManager.createNotificationChannel(channel);
+                Log.d(TAG, "Badge notification channel created");
+            }
+        }
+
+        // Build a silent notification that carries the badge count
+        NotificationCompat.Builder builder =
+                new NotificationCompat.Builder(context, BADGE_CHANNEL_ID)
+                        .setSmallIcon(getAppIconResourceId(context))
+                        .setContentTitle("")
+                        .setContentText("")
+                        // Set the badge number explicitly
+                        .setNumber(count)
+                        // Make it as unobtrusive as possible
+                        .setPriority(NotificationCompat.PRIORITY_MIN)
+                        .setSilent(true)
+                        .setOngoing(false)
+                        .setAutoCancel(false)
+                        // Group to collapse multiple notifications
+                        .setGroup("badge_group")
+                        .setGroupSummary(true);
+
+        notificationManager.notify(BADGE_NOTIFICATION_ID, builder.build());
+        Log.d(TAG, "Notification badge set: count=" + count);
+    }
+
+    /**
+     * Get the app's launcher icon resource ID.
+     * Falls back to the default Android icon if not found.
+     */
+    private int getAppIconResourceId(Context context) {
+        try {
+            return context.getPackageManager()
+                    .getApplicationInfo(context.getPackageName(), 0)
+                    .icon;
+        } catch (PackageManager.NameNotFoundException e) {
+            Log.w(TAG, "App icon not found, using default");
+            return android.R.drawable.ic_dialog_info;
+        }
+    }
+
+    // ════════════════════════════════════════════════════════
+    // BADGE STRATEGY: Samsung (OneUI / TouchWiz)
+    // Supports both legacy BadgeProvider and new broadcasts.
+    // Samsung S25 (OneUI 7) primarily uses notification badge,
+    // but we also try the ContentProvider method for older
+    // Samsung devices.
+    // ════════════════════════════════════════════════════════
+    private void setBadgeSamsung(Context context, int count,
+                                 String packageName,
+                                 String launcherClass) {
+
+        // Method 1: Samsung BadgeProvider ContentResolver
+        // This works on Samsung devices with OneUI / TouchWiz
+        try {
+            Uri uri = Uri.parse("content://com.sec.badge/apps");
+            ContentValues cv = new ContentValues();
+            cv.put("package", packageName);
+            cv.put("class", launcherClass);
+            cv.put("badgecount", count);
+
+            Cursor cursor = context.getContentResolver().query(
+                    uri, null, "package=?",
+                    new String[]{packageName}, null);
+
+            if (cursor != null) {
+                if (cursor.moveToFirst()) {
+                    // Update existing record
+                    if (count > 0) {
+                        context.getContentResolver().update(
+                                uri, cv, "package=?",
+                                new String[]{packageName});
+                    } else {
+                        context.getContentResolver().delete(
+                                uri, "package=?",
+                                new String[]{packageName});
+                    }
+                } else {
+                    // Insert new record
+                    if (count > 0) {
+                        context.getContentResolver().insert(uri, cv);
+                    }
+                }
+                cursor.close();
+            }
+            Log.d(TAG, "Samsung BadgeProvider updated: " + count);
+        } catch (Exception e) {
+            Log.w(TAG, "Samsung BadgeProvider failed: " + e.getMessage());
+        }
+
+        // Method 2: Legacy Samsung broadcast
+        // Still works on some older Samsung devices
+        try {
+            Intent intent = new Intent(
+                    "android.intent.action.BADGE_COUNT_UPDATE");
+            intent.putExtra("badge_count", count);
+            intent.putExtra("badge_count_package_name", packageName);
+            intent.putExtra("badge_count_class_name", launcherClass);
+            context.sendBroadcast(intent);
+            Log.d(TAG, "Samsung broadcast sent: " + count);
+        } catch (Exception e) {
+            Log.w(TAG, "Samsung broadcast failed: " + e.getMessage());
+        }
+    }
+
+    // ════════════════════════════════════════════════════════
+    // BADGE STRATEGY: Huawei / Honor (EMUI)
+    // Uses the Huawei Badge ContentProvider
+    // ════════════════════════════════════════════════════════
+    private void setBadgeHuawei(Context context, int count,
+                                String packageName,
+                                String launcherClass) {
+        try {
+            android.os.Bundle bundle = new android.os.Bundle();
+            bundle.putString("package", packageName);
+            bundle.putString("class", launcherClass);
+            bundle.putInt("badgenumber", count);
+
+            context.getContentResolver().call(
+                    Uri.parse("content://com.huawei.android.launcher"
+                            + ".settings/badge/"),
+                    "change_badge", null, bundle);
+
+            Log.d(TAG, "Huawei badge set: " + count);
+        } catch (Exception e) {
+            Log.w(TAG, "Huawei badge failed: " + e.getMessage());
+            // Fallback: Try broadcast method
+            try {
+                Intent intent = new Intent(
+                        "com.huawei.android.launcher.action.UPDATE_BADGENUMBER");
+                intent.putExtra("badge_number", count);
+                intent.putExtra("package_name", packageName);
+                intent.putExtra("class_name", launcherClass);
+                intent.setComponent(new ComponentName(
+                        "com.huawei.android.launcher",
+                        "com.huawei.android.launcher.LauncherProvider"));
+                context.sendBroadcast(intent);
+                Log.d(TAG, "Huawei broadcast fallback sent: " + count);
+            } catch (Exception e2) {
+                Log.w(TAG, "Huawei broadcast fallback also failed: "
+                        + e2.getMessage());
+                throw e; // Re-throw original exception
+            }
+        }
+    }
+
+    // ════════════════════════════════════════════════════════
+    // BADGE STRATEGY: Xiaomi / Redmi / POCO (MIUI / HyperOS)
+    // Uses the MIUI notification badge API via reflection
+    // ════════════════════════════════════════════════════════
+    private void setBadgeXiaomi(Context context, int count,
+                                String packageName,
+                                String launcherClass) {
+        // Xiaomi MIUI uses the notification badge number field.
+        // The system reads notification.number to display the badge.
+        // This is already handled by setNotificationBadge(),
+        // but we also try the MIUI-specific field for older versions.
+
+        try {
+            // Try to set via MIUI notification extra field
+            // This ensures badge works even on older MIUI versions
+            NotificationManager nm = (NotificationManager)
+                    context.getSystemService(Context.NOTIFICATION_SERVICE);
+
+            // Create notification with MIUI-specific extras
+            Notification.Builder builder;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                // Ensure channel exists
+                setNotificationBadge(context, count);
+
+                builder = new Notification.Builder(context, BADGE_CHANNEL_ID);
+            } else {
+                builder = new Notification.Builder(context);
+            }
+
+            Notification notification = builder
+                    .setSmallIcon(getAppIconResourceId(context))
+                    .setContentTitle("")
+                    .setContentText("")
+                    .setNumber(count)
+                    .build();
+
+            // Set MIUI-specific messageCount via reflection
+            try {
+                java.lang.reflect.Field field =
+                        notification.getClass().getDeclaredField("extraNotification");
+                Object extraNotification = field.get(notification);
+                if (extraNotification != null) {
+                    java.lang.reflect.Method method =
+                            extraNotification.getClass().getDeclaredMethod(
+                                    "setMessageCount", int.class);
+                    method.invoke(extraNotification, count);
+                    Log.d(TAG, "Xiaomi extraNotification.setMessageCount: "
+                            + count);
+                }
+            } catch (Exception reflectEx) {
+                // Reflection failed — this is expected on non-MIUI devices
+                // or newer HyperOS versions
+                Log.w(TAG, "Xiaomi reflection failed (expected on HyperOS): "
+                        + reflectEx.getMessage());
+            }
+
+            if (count > 0) {
+                nm.notify(BADGE_NOTIFICATION_ID, notification);
+            } else {
+                nm.cancel(BADGE_NOTIFICATION_ID);
+            }
+
+            Log.d(TAG, "Xiaomi badge set: " + count);
+        } catch (Exception e) {
+            Log.w(TAG, "Xiaomi badge failed: " + e.getMessage());
+            throw new RuntimeException(e);
+        }
+    }
+
+    // ════════════════════════════════════════════════════════
+    // BADGE STRATEGY: OPPO / Realme / OnePlus (ColorOS)
+    // Uses the OPPO badge ContentProvider or broadcast
+    // ════════════════════════════════════════════════════════
+    private void setBadgeOPPO(Context context, int count,
+                              String packageName,
+                              String launcherClass) {
+
+        // Method 1: OPPO/ColorOS ContentProvider
+        try {
+            android.os.Bundle extras = new android.os.Bundle();
+            extras.putInt("app_badge_count", count);
+
+            context.getContentResolver().call(
+                    Uri.parse("content://com.android.badge/badge"),
+                    "setAppBadgeCount", null, extras);
+
+            Log.d(TAG, "OPPO badge ContentProvider set: " + count);
+        } catch (Exception e) {
+            Log.w(TAG, "OPPO ContentProvider failed: " + e.getMessage());
+        }
+
+        // Method 2: Intent broadcast for OPPO
+        try {
+            Intent intent = new Intent(
+                    "com.oppo.unsettledevent");
+            intent.putExtra("pakeageName", packageName); // Note: OPPO typo is intentional
+            intent.putExtra("number", count);
+            intent.putExtra("upgradeNumber", count);
+
+            // Also try the correct spelling
+            intent.putExtra("packageName", packageName);
+            context.sendBroadcast(intent);
+
+            Log.d(TAG, "OPPO broadcast sent: " + count);
+        } catch (Exception e) {
+            Log.w(TAG, "OPPO broadcast failed: " + e.getMessage());
+        }
+
+        // Method 3: OnePlus / newer ColorOS uses standard notification badge
+        // Already handled by setNotificationBadge()
+    }
+
+    // ════════════════════════════════════════════════════════
+    // BADGE STRATEGY: vivo / iQOO (FuntouchOS / OriginOS)
+    // ════════════════════════════════════════════════════════
+    private void setBadgeVivo(Context context, int count,
+                              String packageName,
+                              String launcherClass) {
+        try {
+            Intent intent = new Intent(
+                    "launcher.action.CHANGE_APPLICATION_NOTIFICATION_NUM");
+            intent.putExtra("packageName", packageName);
+            intent.putExtra("className", launcherClass);
+            intent.putExtra("notificationNum", count);
+            context.sendBroadcast(intent);
+
+            Log.d(TAG, "vivo badge broadcast sent: " + count);
+        } catch (Exception e) {
+            Log.w(TAG, "vivo badge failed: " + e.getMessage());
+            throw new RuntimeException(e);
+        }
+    }
+
+    // ════════════════════════════════════════════════════════
+    // BADGE STRATEGY: ZTE
+    // ════════════════════════════════════════════════════════
+    private void setBadgeZTE(Context context, int count,
+                             String packageName,
+                             String launcherClass) {
+        try {
+            android.os.Bundle extras = new android.os.Bundle();
+            extras.putInt("app_badge_count", count);
+            extras.putString("app_badge_component_name",
+                    new ComponentName(packageName, launcherClass)
+                            .flattenToString());
+
+            context.getContentResolver().call(
+                    Uri.parse("content://com.android.launcher3.badge/badge"),
+                    "setAppBadgeCount", null, extras);
+
+            Log.d(TAG, "ZTE badge set: " + count);
+        } catch (Exception e) {
+            Log.w(TAG, "ZTE badge failed: " + e.getMessage());
+            throw new RuntimeException(e);
+        }
+    }
+
+    // ════════════════════════════════════════════════════════
+    // BADGE STRATEGY: Sony (Xperia)
+    // ════════════════════════════════════════════════════════
+    private void setBadgeSony(Context context, int count,
+                              String packageName,
+                              String launcherClass) {
+        try {
+            ContentValues cv = new ContentValues();
+            cv.put("badge_count", count);
+            cv.put("package_name", packageName);
+            cv.put("activity_name", launcherClass);
+
+            // Check if using async or sync provider
+            boolean isSonyShell = isPackageInstalled(context,
+                    "com.sonymobile.home");
+
+            if (isSonyShell) {
+                context.getContentResolver().insert(
+                        Uri.parse("content://com.sonymobile.home"
+                                + ".resourceprovider/badge"),
+                        cv);
+            } else {
+                // Try alternative Sony provider
+                context.getContentResolver().insert(
+                        Uri.parse("content://com.sonyericsson.home"
+                                + ".resourceprovider/badge"),
+                        cv);
+            }
+
+            Log.d(TAG, "Sony badge set: " + count);
+        } catch (Exception e) {
+            Log.w(TAG, "Sony badge failed: " + e.getMessage());
+            throw new RuntimeException(e);
+        }
+    }
+
+    // ════════════════════════════════════════════════════════
+    // BADGE STRATEGY: HTC (Sense)
+    // ════════════════════════════════════════════════════════
+    private void setBadgeHTC(Context context, int count,
+                             String packageName,
+                             String launcherClass) {
+        try {
+            ComponentName component =
+                    new ComponentName(packageName, launcherClass);
+
+            Intent intent = new Intent("com.htc.launcher.action.SET_NOTIFICATION");
+            intent.putExtra("com.htc.launcher.extra.COMPONENT", component.flattenToShortString());
+            intent.putExtra("com.htc.launcher.extra.COUNT", count);
+            context.sendBroadcast(intent);
+
+            // Also try alternative HTC action
+            Intent intent2 = new Intent("com.htc.launcher.action.UPDATE_SHORTCUT");
+            intent2.putExtra("packagename", packageName);
+            intent2.putExtra("count", count);
+            context.sendBroadcast(intent2);
+
+            Log.d(TAG, "HTC badge set: " + count);
+        } catch (Exception e) {
+            Log.w(TAG, "HTC badge failed: " + e.getMessage());
+            throw new RuntimeException(e);
+        }
+    }
+
+    // ════════════════════════════════════════════════════════
+    // BADGE STRATEGY: ASUS (ZenUI)
+    // ════════════════════════════════════════════════════════
+    private void setBadgeASUS(Context context, int count,
+                              String packageName,
+                              String launcherClass) {
+        try {
+            ContentValues cv = new ContentValues();
+            cv.put("badge_count", count);
+            cv.put("package_name", packageName);
+            cv.put("activity_name", launcherClass);
+
+            context.getContentResolver().insert(
+                    Uri.parse("content://com.asus.launcher.badge/badge"),
+                    cv);
+
+            Log.d(TAG, "ASUS badge set: " + count);
+        } catch (Exception e) {
+            Log.w(TAG, "ASUS badge failed: " + e.getMessage());
+            throw new RuntimeException(e);
+        }
+    }
+
+    // ════════════════════════════════════════════════════════
+    // BADGE STRATEGY: Generic broadcast fallback
+    // Works with third-party launchers (Nova, Action, etc.)
+    // ════════════════════════════════════════════════════════
+    private void setBadgeGenericBroadcast(Context context, int count,
+                                          String packageName,
+                                          String launcherClass) {
+        // Generic badge broadcast — supported by many launchers
+        try {
+            Intent intent = new Intent("android.intent.action.BADGE_COUNT_UPDATE");
+            intent.putExtra("badge_count", count);
+            intent.putExtra("badge_count_package_name", packageName);
+            intent.putExtra("badge_count_class_name", launcherClass);
+            context.sendBroadcast(intent);
+        } catch (Exception e) {
+            Log.w(TAG, "Generic broadcast failed: " + e.getMessage());
+        }
+
+        // Alternative generic intent used by some launchers
+        try {
+            Intent intent2 = new Intent("me.leolin.shortcutbadger.BADGE_COUNT_UPDATE");
+            intent2.putExtra("badge_count", count);
+            intent2.putExtra("badge_count_package_name", packageName);
+            intent2.putExtra("badge_count_class_name", launcherClass);
+            context.sendBroadcast(intent2);
+        } catch (Exception e) {
+            Log.w(TAG, "ShortcutBadger broadcast failed: " + e.getMessage());
+        }
+    }
+
+    // ════════════════════════════════════════════════════════
+    // HELPER: Check if a package is installed
+    // ════════════════════════════════════════════════════════
+    private boolean isPackageInstalled(Context context, String packageName) {
+        try {
+            context.getPackageManager().getPackageInfo(packageName, 0);
+            return true;
+        } catch (PackageManager.NameNotFoundException e) {
+            return false;
+        }
+    }
+
+    // ════════════════════════════════════════════════════════
+    // HELPER: Get launcher activity class name
+    // ════════════════════════════════════════════════════════
+    private String getLauncherClassName() {
+        Context context = cordova.getContext();
+        android.content.pm.PackageManager pm = context.getPackageManager();
+
+        Intent intent = new Intent(Intent.ACTION_MAIN);
+        intent.addCategory(Intent.CATEGORY_LAUNCHER);
+
+        List<ResolveInfo> resolveInfos = pm.queryIntentActivities(intent, 0);
+
+        for (ResolveInfo resolveInfo : resolveInfos) {
+            if (resolveInfo.activityInfo.packageName
+                    .equals(context.getPackageName())) {
+                return resolveInfo.activityInfo.name;
+            }
+        }
+        return null;
+    }
+
+    // ════════════════════════════════════════════════════════
     // HELPER: Send status callback
     // ════════════════════════════════════════════════════════
     private void sendStatus(CallbackContext cb, String status,
@@ -1271,62 +1944,5 @@ public class EnterpriseAppStore extends CordovaPlugin {
             default:
                 return "Unknown error (code: " + reason + ")";
         }
-    }
-
-    private void setBadgeNumber(int count, CallbackContext callbackContext) {
-        try {
-            Context context = cordova.getContext();
-
-            // Get launcher activity
-            String launcherClass = getLauncherClassName();
-            if (launcherClass == null) {
-                callbackContext.error("LAUNCHER_NOT_FOUND");
-                return;
-            }
-
-            // Samsung / OneUI badge broadcast
-            Intent intent = new Intent(
-                    "android.intent.action.BADGE_COUNT_UPDATE"
-            );
-            intent.putExtra("badge_count", count);
-            intent.putExtra("badge_count_package_name",
-                    context.getPackageName());
-            intent.putExtra("badge_count_class_name",
-                    launcherClass);
-
-            context.sendBroadcast(intent);
-
-            JSONObject result = new JSONObject();
-            result.put("badge", count);
-            result.put("vendor", "samsung");
-
-            callbackContext.success(result);
-
-            Log.d(TAG, "setBadgeNumber success = " + count);
-
-        } catch (Exception e) {
-            Log.e(TAG, "setBadgeNumber error", e);
-            callbackContext.error(
-                "SET_BADGE_ERROR: " + e.getMessage()
-            );
-        }
-    }
-
-    private String getLauncherClassName() {
-        Context context = cordova.getContext();
-        android.content.pm.PackageManager pm = context.getPackageManager();
-
-        Intent intent = new Intent(Intent.ACTION_MAIN);
-        intent.addCategory(Intent.CATEGORY_LAUNCHER);
-
-        List<ResolveInfo> resolveInfos = pm.queryIntentActivities(intent, 0);
-
-        for (ResolveInfo resolveInfo : resolveInfos) {
-            if (resolveInfo.activityInfo.packageName
-                    .equals(context.getPackageName())) {
-                return resolveInfo.activityInfo.name;
-            }
-        }
-        return null;
     }
 }
