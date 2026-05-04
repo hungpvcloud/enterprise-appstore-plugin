@@ -27,7 +27,8 @@
     ============================================================ -->
     <platform name="android">
 
-        <framework src="androidx.core:core:1.9.0" />
+        <!-- <framework src="androidx.core:core:1.9.0" /> -->
+        <framework src="androidx.core:core:1.12.0" />
         <framework src="androidx.appcompat:appcompat:1.6.1" />
 
         <!-- ✅ PERMISSIONS - Optimize for Scoped Storage -->
@@ -35,6 +36,7 @@
             <uses-permission android:name="android.permission.INTERNET" />
             <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
             <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+            <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
             
             <!-- Legacy permissions for Android 9 down -->
             <uses-permission
@@ -127,6 +129,7 @@
         <source-file src="src/ios/EnterpriseAppStore.m" />
 
         <!-- Frameworks -->
+        <framework src="UserNotifications.framework" />
         <framework src="Security.framework" />
         <framework src="UIKit.framework" />
     </platform>
