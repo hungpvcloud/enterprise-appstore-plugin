@@ -11,6 +11,7 @@
  *                          and persistent UUID (Keychain)
  *   - checkUpdate        : Compare installed vs latest version
  *   - openApp            : Launch another app by URL scheme
+ *   - setBadgeNumber     : Set app icon badge (iOS 10-18+ compatible)
  ****************************************************************/
 
 #import <Cordova/CDV.h>
@@ -18,6 +19,7 @@
 #import <Security/Security.h>
 #import <sys/utsname.h>
 #import <sys/sysctl.h>
+#import <UserNotifications/UserNotifications.h>
 
 // ════════════════════════════════════════════════════════════
 // MARK: - Constants
@@ -40,6 +42,7 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
 - (void)getDeviceInfo:(CDVInvokedUrlCommand *)command;
 - (void)checkUpdate:(CDVInvokedUrlCommand *)command;
 - (void)openApp:(CDVInvokedUrlCommand *)command;
+- (void)setBadgeNumber:(CDVInvokedUrlCommand *)command;
 @end
 
 // ════════════════════════════════════════════════════════════
@@ -222,7 +225,7 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
     NSDictionary *result = @{
         @"isInstalled": @(isInstalled),
         @"packageName": urlScheme,
-        @"versionName": @"",    // iOS cannot read version of other apps
+        @"versionName": @"",
         @"versionCode": @0
     };
 
@@ -270,15 +273,10 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
 
 #pragma mark - Jailbreak Detection
 
-/**
- * Multi-method jailbreak detection for reliability.
- * Checks: suspicious files, sandbox escape, Cydia URL scheme, dynamic libraries
- */
 - (BOOL)checkIsJailbroken {
 #if TARGET_OS_SIMULATOR
     return NO;
 #else
-    // Check 1: Known jailbreak file paths
     NSArray *suspiciousPaths = @[
         @"/Applications/Cydia.app",
         @"/Library/MobileSubstrate/MobileSubstrate.dylib",
@@ -302,7 +300,6 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
         }
     }
 
-    // Check 2: Write outside sandbox
     NSString *testPath = [NSString stringWithFormat:@"/private/jailbreak_test_%@.txt",
                           [[NSUUID UUID] UUIDString]];
     NSError *error = nil;
@@ -313,14 +310,12 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
         return YES;
     }
 
-    // Check 3: Cydia URL scheme
     NSURL *cydiaUrl = [NSURL URLWithString:@"cydia://package/com.example.package"];
     if (cydiaUrl && [[UIApplication sharedApplication] canOpenURL:cydiaUrl]) {
         NSLog(@"[EnterpriseAppStore] Jailbreak detected: Cydia URL scheme available");
         return YES;
     }
 
-    // Check 4: Suspicious dynamic libraries
     NSArray *suspiciousLibs = @[@"SubstrateLoader", @"cycript",
                                 @"MobileSubstrate", @"SSLKillSwitch"];
     for (NSString *lib in suspiciousLibs) {
@@ -340,22 +335,16 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
 #if TARGET_OS_SIMULATOR
     return YES;
 #else
-    // Secondary check via environment variable
     return [[[NSProcessInfo processInfo] environment] objectForKey:@"SIMULATOR_DEVICE_NAME"] != nil;
 #endif
 }
 
 #pragma mark - Developer Mode Detection
 
-/**
- * iOS 16+: returns YES only for DEBUG builds.
- * iOS < 16: checks for embedded provisioning profile.
- */
 - (BOOL)checkIsDeveloperMode {
 #if DEBUG
     return YES;
 #else
-    // Presence of provisioning profile indicates dev/enterprise build
     NSString *provisionPath = [[NSBundle mainBundle] pathForResource:@"embedded"
                                                               ofType:@"mobileprovision"];
     return (provisionPath != nil);
@@ -364,20 +353,13 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
 
 #pragma mark - App Store Installation Check
 
-/**
- * Returns YES if installed from App Store.
- * Enterprise/dev builds include provisioning profile.
- * App Store builds include StoreKit receipt.
- */
 - (BOOL)checkIsInstalledFromStore {
-    // Provisioning profile = not from App Store
     NSString *provisionPath = [[NSBundle mainBundle] pathForResource:@"embedded"
                                                               ofType:@"mobileprovision"];
     if (provisionPath != nil) {
         return NO;
     }
 
-    // Check for App Store receipt
     NSURL *receiptURL = [[NSBundle mainBundle] appStoreReceiptURL];
     if (receiptURL && [[NSFileManager defaultManager] fileExistsAtPath:[receiptURL path]]) {
         return YES;
@@ -386,61 +368,39 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
     return NO;
 }
 
-#pragma mark - ⭐ Get Device Info (Auto Model Name + Persistent UUID)
+#pragma mark - Get Device Info
 
-/**
- * Returns comprehensive device information.
- *
- * Model Name Resolution — 3-Layer Automatic Strategy:
- *   Layer 1: Local Cache (NSUserDefaults) — fastest, offline
- *   Layer 2: IPSW.me Public API — auto-updated, no maintenance
- *            https://api.ipsw.me/v4/device/{identifier}
- *   Layer 3: Fallback auto-parse — "iPhone17,1" → "iPhone (17,1)"
- *
- * UUID Strategy:
- *   Keychain-backed for persistence across app reinstalls.
- */
 - (void)getDeviceInfo:(CDVInvokedUrlCommand *)command {
 
-    // Get raw machine identifier (e.g. "iPhone17,1")
     NSString *machineId = [self getMachineIdentifier];
 
-    // Resolve model name asynchronously (may call IPSW API)
     [self resolveModelName:machineId completion:^(NSString *modelName) {
 
-        // All UIKit calls must be on main thread
         dispatch_async(dispatch_get_main_queue(), ^{
 
-            // ── Enable battery monitoring ──
             [UIDevice currentDevice].batteryMonitoringEnabled = YES;
 
-            // ── Hardware info ──
             NSString *deviceName = [UIDevice currentDevice].name;
             NSString *sysName    = [UIDevice currentDevice].systemName;
             NSString *sysVersion = [UIDevice currentDevice].systemVersion;
 
-            // ── App bundle info ──
             NSString *appVersion  = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"Unknown";
             NSString *appBuild    = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"0";
             NSString *packageName = [[NSBundle mainBundle] bundleIdentifier] ?: @"Unknown";
 
-            // ── Screen dimensions ──
             CGFloat screenWidth  = [UIScreen mainScreen].bounds.size.width;
             CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
             CGFloat screenScale  = [UIScreen mainScreen].scale;
 
-            // ── Locale and timezone ──
             NSString *locale   = [[NSLocale currentLocale] localeIdentifier];
             NSString *timezone = [[NSTimeZone localTimeZone] name];
 
-            // ── Battery status ──
             float batteryLevel = [UIDevice currentDevice].batteryLevel;
             int batteryPct     = (batteryLevel >= 0) ? (int)(batteryLevel * 100) : -1;
             UIDeviceBatteryState batteryState = [UIDevice currentDevice].batteryState;
             BOOL isCharging    = (batteryState == UIDeviceBatteryStateCharging ||
                                   batteryState == UIDeviceBatteryStateFull);
 
-            // ── Storage (in MB) ──
             long long availableStorageMB = 0;
             long long totalStorageMB     = 0;
             NSError *fsError = nil;
@@ -454,13 +414,10 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
                 if (totalSize) totalStorageMB     = [totalSize longLongValue] / (1024 * 1024);
             }
 
-            // ── Disable battery monitoring ──
             [UIDevice currentDevice].batteryMonitoringEnabled = NO;
 
-            // ── Get persistent UUID ──
             NSString *uuid = [self getStableUUID];
 
-            // ── Build result ──
             NSDictionary *result = @{
                 @"uuid":               uuid,
                 @"machineIdentifier":  machineId,
@@ -470,7 +427,7 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
                 @"device":             deviceName,
                 @"product":            modelName,
                 @"systemName":         sysName,
-                @"androidVersion":     sysVersion,    // Shared key for JS compatibility
+                @"androidVersion":     sysVersion,
                 @"systemVersion":      sysVersion,
                 @"sdkVersion":         @0,
                 @"appVersion":         appVersion,
@@ -501,11 +458,6 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
 
 #pragma mark - Machine Identifier
 
-/**
- * Returns raw hardware identifier using sysctlbyname("hw.machine").
- * e.g. "iPhone17,1", "iPad14,8"
- * Handles simulator by reading environment variable.
- */
 - (NSString *)getMachineIdentifier {
     size_t size;
     sysctlbyname("hw.machine", NULL, &size, NULL, 0);
@@ -513,8 +465,7 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
     sysctlbyname("hw.machine", machine, &size, NULL, 0);
     NSString *identifier = [NSString stringWithCString:machine encoding:NSUTF8StringEncoding];
     free(machine);
-        // On simulator, hw.machine returns "x86_64" or "arm64"
-    // Read simulated device model from environment instead
+
     if ([identifier isEqualToString:@"x86_64"] || [identifier isEqualToString:@"arm64"]) {
         NSString *simModel = [[[NSProcessInfo processInfo] environment]
                               objectForKey:@"SIMULATOR_MODEL_IDENTIFIER"];
@@ -528,50 +479,29 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
 
 #pragma mark - Stable UUID (Keychain-backed)
 
-/**
- * Returns a persistent UUID stored in the Keychain.
- * Unlike identifierForVendor, this survives app reinstalls.
- * Falls back to identifierForVendor or random UUID if Keychain is empty.
- */
 - (NSString *)getStableUUID {
 
-    // Step 1: Try reading existing UUID from Keychain
     NSString *existingUUID = [self keychainRead:kKeychainUUIDKey];
     if (existingUUID && [existingUUID length] > 0) {
         return existingUUID;
     }
 
-    // Step 2: Generate new UUID
     NSString *newUUID = [[[UIDevice currentDevice] identifierForVendor] UUIDString];
     if (!newUUID || [newUUID length] == 0) {
         newUUID = [[NSUUID UUID] UUIDString];
     }
 
-    // Step 3: Save to Keychain for persistence
     [self keychainSave:kKeychainUUIDKey value:newUUID];
 
     NSLog(@"[EnterpriseAppStore] UUID generated and saved to Keychain: %@", newUUID);
     return newUUID;
 }
 
-#pragma mark - ⭐ Model Name Resolution (3-Layer Automatic)
+#pragma mark - Model Name Resolution (3-Layer Automatic)
 
-/**
- * Resolves machine identifier to marketing name.
- *
- * Layer 1: Local Cache (NSUserDefaults) — fastest, offline
- * Layer 2: IPSW.me API — free, public, auto-updated within hours
- *          of new Apple device announcements. No API key needed.
- *          https://api.ipsw.me/v4/device/{identifier}
- * Layer 3: Fallback auto-parse — never fails
- *          "iPhone17,1" → "iPhone (17,1)"
- *
- * completion block is called with the resolved model name.
- */
 - (void)resolveModelName:(NSString *)identifier
               completion:(void (^)(NSString *modelName))completion {
 
-    // ── Layer 1: Check local cache ──
     if ([self isCacheValid]) {
         NSString *cached = [self getModelFromCache:identifier];
         if (cached && [cached length] > 0) {
@@ -581,7 +511,6 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
         }
     }
 
-    // ── Layer 2: Fetch from IPSW.me API ──
     [self fetchModelFromIPSW:identifier completion:^(NSString *apiName) {
 
         if (apiName && [apiName length] > 0) {
@@ -591,10 +520,8 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
             return;
         }
 
-        // ── Layer 3: Fallback auto-parse ──
         NSString *fallback = [self fallbackModelName:identifier];
         NSLog(@"[EnterpriseAppStore] Model FALLBACK: %@", fallback);
-        // Cache fallback to avoid repeated API retries
         [self saveModelToCache:identifier modelName:fallback];
         completion(fallback);
     }];
@@ -602,13 +529,11 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
 
 #pragma mark - Layer 1: Local Cache Helpers
 
-/// Read cached model name for a machine identifier
 - (NSString *)getModelFromCache:(NSString *)identifier {
     NSString *key = [kModelCachePrefix stringByAppendingString:identifier];
     return [[NSUserDefaults standardUserDefaults] stringForKey:key];
 }
 
-/// Save model name to local cache with timestamp
 - (void)saveModelToCache:(NSString *)identifier modelName:(NSString *)modelName {
     NSString *key = [kModelCachePrefix stringByAppendingString:identifier];
     [[NSUserDefaults standardUserDefaults] setObject:modelName forKey:key];
@@ -616,7 +541,6 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
                                               forKey:kModelCacheTimestamp];
 }
 
-/// Check whether local cache is still within TTL (30 days)
 - (BOOL)isCacheValid {
     double timestamp = [[NSUserDefaults standardUserDefaults] doubleForKey:kModelCacheTimestamp];
     if (timestamp <= 0) return NO;
@@ -625,26 +549,9 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
 
 #pragma mark - Layer 2: IPSW.me API
 
-/**
- * Fetch marketing name from IPSW.me API.
- *
- * Example request:
- *   GET https://api.ipsw.me/v4/device/iPhone17,1
- *
- * Example response (trimmed):
- *   {
- *     "name": "iPhone 16 Pro",
- *     "identifier": "iPhone17,1",
- *     "firmwares": [ ... ]
- *   }
- *
- * We only extract the "name" field.
- * Timeout is 5 seconds to avoid blocking too long.
- */
 - (void)fetchModelFromIPSW:(NSString *)identifier
                 completion:(void (^)(NSString *name))completion {
 
-    // URL-encode identifier ("iPhone17,1" → "iPhone17%2C1")
     NSString *encoded = [identifier stringByAddingPercentEncodingWithAllowedCharacters:
                          [NSCharacterSet URLPathAllowedCharacterSet]];
     if (!encoded) {
@@ -673,14 +580,12 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
         dataTaskWithRequest:request
         completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
 
-        // Check network error
         if (error) {
             NSLog(@"[EnterpriseAppStore] IPSW: Network error: %@", error.localizedDescription);
             completion(nil);
             return;
         }
 
-        // Validate HTTP status
         NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)response;
         if (httpResponse.statusCode != 200) {
             NSLog(@"[EnterpriseAppStore] IPSW: HTTP %ld for %@",
@@ -689,14 +594,12 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
             return;
         }
 
-        // Validate data
         if (!data) {
             NSLog(@"[EnterpriseAppStore] IPSW: Empty response data");
             completion(nil);
             return;
         }
 
-                // Parse JSON and extract "name" field
         NSError *jsonError = nil;
         NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data
                                                              options:0
@@ -722,27 +625,12 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
 
 #pragma mark - Layer 3: Fallback Auto-Parse
 
-/**
- * Parses raw machine identifier into a human-readable format.
- * Never returns nil or empty string.
- *
- * Examples:
- *   "iPhone17,1"        → "iPhone (17,1)"
- *   "iPad14,8"          → "iPad (14,8)"
- *   "iPod9,1"           → "iPod touch (9,1)"
- *   "Watch7,1"          → "Apple Watch (7,1)"
- *   "AudioAccessory6,1" → "HomePod (6,1)"
- *   "AppleTV14,1"       → "Apple TV (14,1)"
- *   "arm64"             → "arm64" (simulator edge case)
- */
 - (NSString *)fallbackModelName:(NSString *)identifier {
 
     if (!identifier || [identifier length] == 0) {
         return @"Unknown";
     }
 
-    // Split identifier into letter prefix and numeric suffix
-    // e.g. "iPhone17,1" → prefix="iPhone", suffix="17,1"
     NSMutableString *prefix = [NSMutableString string];
     NSMutableString *suffix = [NSMutableString string];
     BOOL hitDigit = NO;
@@ -757,7 +645,6 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
         }
     }
 
-    // Map common prefixes to user-friendly device type names
     NSString *deviceType;
     NSString *lowerPrefix = [prefix lowercaseString];
 
@@ -783,7 +670,6 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
         deviceType = prefix;
     }
 
-    // If no numeric suffix, return just device type
     if ([suffix length] == 0) {
         return ([deviceType length] > 0) ? deviceType : identifier;
     }
@@ -793,10 +679,6 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
 
 #pragma mark - Check Update
 
-/**
- * Compares installed app version against latest version.
- * Returns: { needsUpdate, installedVersion, latestVersion, packageName, isInstalled }
- */
 - (void)checkUpdate:(CDVInvokedUrlCommand *)command {
 
     NSString *latestVersion = nil;
@@ -843,17 +725,10 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
 
 #pragma mark - Open App
 
-/**
- * Launch another app by URL scheme.
- * Uses UIApplication.open() directly — no LSApplicationQueriesSchemes needed.
- *
- * Parameter: urlScheme — e.g. "myapp" or "myapp://path?key=value"
- */
 - (void)openApp:(CDVInvokedUrlCommand *)command {
 
     NSString *urlScheme = [command.arguments objectAtIndex:0];
 
-    // Validate URL scheme
     if (!urlScheme ||
         [[urlScheme stringByTrimmingCharactersInSet:
           [NSCharacterSet whitespaceAndNewlineCharacterSet]] length] == 0) {
@@ -871,13 +746,12 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
                                                       messageAsDictionary:result];
         [pluginResult setKeepCallbackAsBool:NO];
         [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
-                return;
+        return;
     }
 
     NSString *scheme = [urlScheme stringByTrimmingCharactersInSet:
                         [NSCharacterSet whitespaceAndNewlineCharacterSet]];
 
-    // Build URL: "myapp" → "myapp://", "myapp://path" → as-is
     NSString *urlString;
     if ([scheme containsString:@"://"]) {
         urlString = scheme;
@@ -903,7 +777,6 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
         return;
     }
 
-    // Open directly — no canOpenURL() check needed, no Info.plist config needed
     dispatch_async(dispatch_get_main_queue(), ^{
         NSLog(@"[EnterpriseAppStore] openApp: Opening '%@' directly...", urlString);
 
@@ -944,42 +817,348 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
     });
 }
 
+// ════════════════════════════════════════════════════════════
+// MARK: - ⭐ Set Badge Number (iOS 10-18+ compatible)
+// ════════════════════════════════════════════════════════════
+//
+// Badge behavior across iOS versions:
+//
+// ┌──────────┬──────────────────────────────────────────────────┐
+// │ iOS Ver  │ Badge Mechanism                                  │
+// ├──────────┼──────────────────────────────────────────────────┤
+// │ 10 - 15  │ applicationIconBadgeNumber works directly        │
+// │ 16 - 17  │ Requires notification authorization for badge    │
+// │ 18+      │ applicationIconBadgeNumber deprecated,           │
+// │          │ use UNUserNotificationCenter.setBadgeCount       │
+// └──────────┴──────────────────────────────────────────────────┘
+//
+// Strategy:
+//   1. Request notification authorization (provisional if available)
+//   2. Use setBadgeCount on iOS 16+ (modern API)
+//   3. Fallback to applicationIconBadgeNumber for older iOS
+// ════════════════════════════════════════════════════════════
 
+#pragma mark - Set Badge Number
+
+/**
+ * Sets the app icon badge number with full iOS version compatibility.
+ *
+ * Automatically handles:
+ *   - Notification permission request (iOS 16+ requires this for badge)
+ *   - UNUserNotificationCenter.setBadgeCount (iOS 16+)
+ *   - UIApplication.applicationIconBadgeNumber (iOS 10-15 fallback)
+ *   - Provisional authorization (non-intrusive permission request)
+ *
+ * Parameter: count (integer) — 0 to clear badge, >0 to set badge number
+ *
+ * Returns: {
+ *   badge:                number,
+ *   platform:             "ios",
+ *   method:               "setBadgeCount" | "applicationIconBadgeNumber",
+ *   notificationStatus:   "authorized" | "provisional" | "denied" | "notDetermined",
+ *   iosVersion:           string
+ * }
+ */
 - (void)setBadgeNumber:(CDVInvokedUrlCommand *)command {
+
+    NSInteger badge = 0;
+    if (command.arguments.count > 0) {
+        badge = [[command.arguments objectAtIndex:0] integerValue];
+    }
+
+    // Clamp to non-negative value
+    if (badge < 0) {
+        badge = 0;
+    }
+
+    NSString *iosVersion = [[UIDevice currentDevice] systemVersion];
+    NSLog(@"[EnterpriseAppStore] setBadgeNumber: count=%ld iOS=%@",
+          (long)badge, iosVersion);
+
+    // Capture badge value for use in blocks
+    NSInteger badgeCount = badge;
+    NSString *callbackId = command.callbackId;
+
+    // Step 1: Check and request notification authorization
+    // iOS 16+ requires notification permission for badge to display
+    UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];
+
+    [center getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings *settings) {
+
+        NSLog(@"[EnterpriseAppStore] Notification authorization status: %ld",
+              (long)settings.authorizationStatus);
+
+        // Determine if we need to request authorization
+        if (settings.authorizationStatus == UNAuthorizationStatusNotDetermined) {
+            // First time: request provisional authorization (non-intrusive)
+            // Provisional auth delivers notifications quietly and allows badge
+            [self requestNotificationAuthAndSetBadge:badgeCount
+                                          callbackId:callbackId
+                                          iosVersion:iosVersion];
+        }
+        else if (settings.authorizationStatus == UNAuthorizationStatusDenied) {
+            // Permission denied: try to set badge anyway (works on iOS < 16)
+            // On iOS 16+ badge may not show, but we still try
+            NSLog(@"[EnterpriseAppStore] Notification permission denied, "
+                  @"attempting badge set anyway");
+            [self applyBadgeCount:badgeCount
+                       callbackId:callbackId
+                       iosVersion:iosVersion
+               notificationStatus:@"denied"];
+        }
+        else {
+            // Authorized or Provisional: set badge directly
+            NSString *statusStr = [self notificationStatusToString:settings.authorizationStatus];
+            [self applyBadgeCount:badgeCount
+                       callbackId:callbackId
+                       iosVersion:iosVersion
+               notificationStatus:statusStr];
+        }
+    }];
+}
+
+#pragma mark - Badge Helper: Request Notification Auth Then Set Badge
+
+/**
+ * Requests provisional notification authorization, then sets badge.
+ * Provisional authorization (iOS 12+) does NOT show a permission dialog
+ * to the user — it silently grants limited notification permission
+ * which includes badge capability.
+ */
+- (void)requestNotificationAuthAndSetBadge:(NSInteger)badgeCount
+                                callbackId:(NSString *)callbackId
+                                iosVersion:(NSString *)iosVersion {
+
+    UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];
+
+    // Request authorization options: badge is the primary need
+    // Include provisional to avoid showing permission dialog
+    UNAuthorizationOptions options = UNAuthorizationOptionBadge;
+
+    // iOS 12+ supports provisional authorization (silent, no dialog)
+    if (@available(iOS 12.0, *)) {
+        options = UNAuthorizationOptionBadge | UNAuthorizationOptionProvisional;
+    }
+
+    NSLog(@"[EnterpriseAppStore] Requesting notification authorization for badge...");
+
+    [center requestAuthorizationWithOptions:options
+                          completionHandler:^(BOOL granted, NSError *error) {
+
+        if (error) {
+            NSLog(@"[EnterpriseAppStore] Notification auth error: %@",
+                  error.localizedDescription);
+        }
+
+        NSString *statusStr = granted ? @"authorized" : @"denied";
+
+        // Check actual status after request (may be provisional)
+        if (@available(iOS 12.0, *)) {
+            [center getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings *settings) {
+                NSString *actualStatus = [self notificationStatusToString:settings.authorizationStatus];
+                NSLog(@"[EnterpriseAppStore] Notification auth result: granted=%d status=%@",
+                      granted, actualStatus);
+
+                [self applyBadgeCount:badgeCount
+                           callbackId:callbackId
+                           iosVersion:iosVersion
+                   notificationStatus:actualStatus];
+            }];
+        } else {
+            NSLog(@"[EnterpriseAppStore] Notification auth result: granted=%d", granted);
+
+            [self applyBadgeCount:badgeCount
+                       callbackId:callbackId
+                       iosVersion:iosVersion
+               notificationStatus:statusStr];
+        }
+    }];
+}
+
+#pragma mark - Badge Helper: Apply Badge Count
+
+/**
+ * Actually sets the badge number using the appropriate API for the iOS version.
+ *
+ * iOS 16+ (API available): UNUserNotificationCenter.setBadgeCount
+ *   - This is the modern, non-deprecated API
+ *   - Works with notification authorization
+ *
+ * iOS 10-15 (fallback): UIApplication.applicationIconBadgeNumber
+ *   - Legacy API, still functional on older iOS
+ *   - Does not require notification authorization
+ */
+- (void)applyBadgeCount:(NSInteger)badgeCount
+             callbackId:(NSString *)callbackId
+             iosVersion:(NSString *)iosVersion
+     notificationStatus:(NSString *)notificationStatus {
 
     dispatch_async(dispatch_get_main_queue(), ^{
 
-        NSInteger badge = 0;
-        if (command.arguments.count > 0) {
-            badge = [[command.arguments objectAtIndex:0] integerValue];
+        NSString *method = @"unknown";
+        BOOL success = YES;
+        NSString *errorMessage = @"";
+
+        // Strategy: try modern API first, then fallback
+
+        if (@available(iOS 16.0, *)) {
+            // ── iOS 16+: Use setBadgeCount (modern API) ──
+            // This API respects notification authorization and is
+            // the officially supported way to set badge on iOS 16+
+
+            method = @"setBadgeCount";
+
+            UNUserNotificationCenter *center =
+                [UNUserNotificationCenter currentNotificationCenter];
+
+            // setBadgeCount is synchronous-ish via completion handler
+            // but we also set the legacy property as double-insurance
+            [center setBadgeCount:badgeCount
+                withCompletionHandler:^(NSError *error) {
+                if (error) {
+                    NSLog(@"[EnterpriseAppStore] setBadgeCount error: %@",
+                          error.localizedDescription);
+
+                    // Fallback: try legacy API even on iOS 16+
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        // Suppress deprecation warning — this is intentional fallback
+                        #pragma clang diagnostic push
+                        #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+                        [UIApplication sharedApplication].applicationIconBadgeNumber = badgeCount;
+                        #pragma clang diagnostic pop
+
+                        NSLog(@"[EnterpriseAppStore] Fallback to applicationIconBadgeNumber");
+
+                        [self sendBadgeResultWithCallbackId:callbackId
+                                                      badge:badgeCount
+                                                     method:@"applicationIconBadgeNumber_fallback"
+                                         notificationStatus:notificationStatus
+                                                 iosVersion:iosVersion
+                                                    success:YES
+                                               errorMessage:error.localizedDescription];
+                    });
+                } else {
+                    NSLog(@"[EnterpriseAppStore] setBadgeCount success: %ld",
+                          (long)badgeCount);
+
+                    [self sendBadgeResultWithCallbackId:callbackId
+                                                  badge:badgeCount
+                                                 method:@"setBadgeCount"
+                                     notificationStatus:notificationStatus
+                                             iosVersion:iosVersion
+                                                success:YES
+                                           errorMessage:@""];
+                }
+            }];
+
+            // Return early — result sent in completion handler above
+            return;
         }
 
-        // Set badge number
-        [UIApplication sharedApplication].applicationIconBadgeNumber = badge;
+        // ── iOS 10-15: Use applicationIconBadgeNumber (legacy API) ──
+        // No deprecation issue on these versions
+        method = @"applicationIconBadgeNumber";
+        [UIApplication sharedApplication].applicationIconBadgeNumber = badgeCount;
+        NSLog(@"[EnterpriseAppStore] applicationIconBadgeNumber set: %ld",
+              (long)badgeCount);
 
-        // Optional: update notification badge as well
-        NSDictionary *result = @{
-            @"badge": @(badge),
-            @"platform": @"iOS"
-        };
-
-        CDVPluginResult *pluginResult =
-            [CDVPluginResult resultWithStatus:CDVCommandStatus_OK
-                           messageAsDictionary:result];
-
-        [self.commandDelegate sendPluginResult:pluginResult
-                                    callbackId:command.callbackId];
+        [self sendBadgeResultWithCallbackId:callbackId
+                                      badge:badgeCount
+                                     method:method
+                         notificationStatus:notificationStatus
+                                 iosVersion:iosVersion
+                                    success:success
+                               errorMessage:errorMessage];
     });
 }
-#pragma mark - Semantic Version Comparison
+
+#pragma mark - Badge Helper: Send Result to JavaScript
 
 /**
- * Returns YES if v1 < v2 (update needed).
- * Supports: "1.2.3", "v2.0", "10.0.1"
+ * Sends the badge operation result back to the JavaScript layer.
+ * Provides detailed information about which method was used
+ * and the notification permission status.
  */
+- (void)sendBadgeResultWithCallbackId:(NSString *)callbackId
+                                badge:(NSInteger)badge
+                               method:(NSString *)method
+                   notificationStatus:(NSString *)notificationStatus
+                           iosVersion:(NSString *)iosVersion
+                              success:(BOOL)success
+                         errorMessage:(NSString *)errorMessage {
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+
+        NSMutableDictionary *result = [NSMutableDictionary dictionaryWithDictionary:@{
+            @"badge":              @(badge),
+            @"platform":           @"ios",
+            @"method":             method,
+            @"notificationStatus": notificationStatus,
+            @"iosVersion":         iosVersion,
+            @"success":            @(success)
+        }];
+
+        // Include error message if present
+        if (errorMessage && [errorMessage length] > 0) {
+            result[@"errorMessage"] = errorMessage;
+        }
+
+        NSLog(@"[EnterpriseAppStore] setBadgeNumber result: badge=%ld method=%@ "
+              @"notifStatus=%@ success=%d",
+              (long)badge, method, notificationStatus, success);
+
+        CDVPluginResult *pluginResult;
+        if (success) {
+            pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK
+                                         messageAsDictionary:result];
+        } else {
+            pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR
+                                         messageAsDictionary:result];
+        }
+
+        [pluginResult setKeepCallbackAsBool:NO];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:callbackId];
+    });
+}
+
+#pragma mark - Badge Helper: Notification Status to String
+
+/**
+ * Converts UNAuthorizationStatus enum to human-readable string.
+ */
+- (NSString *)notificationStatusToString:(UNAuthorizationStatus)status {
+    switch (status) {
+        case UNAuthorizationStatusAuthorized:
+            return @"authorized";
+        case UNAuthorizationStatusDenied:
+            return @"denied";
+        case UNAuthorizationStatusNotDetermined:
+            return @"notDetermined";
+        default:
+            break;
+    }
+
+    // iOS 12+ statuses
+    if (@available(iOS 12.0, *)) {
+        if (status == UNAuthorizationStatusProvisional) {
+            return @"provisional";
+        }
+    }
+
+    // iOS 14+ statuses
+    if (@available(iOS 14.0, *)) {
+        if (status == UNAuthorizationStatusEphemeral) {
+            return @"ephemeral";
+        }
+    }
+
+    return @"unknown";
+}
+
+#pragma mark - Semantic Version Comparison
+
 - (BOOL)compareVersion:(NSString *)v1 isLessThan:(NSString *)v2 {
 
-    // Strip non-numeric, non-dot characters (e.g. "v1.2.3" → "1.2.3")
     NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"[^0-9.]"
                                                                           options:0
                                                                             error:nil];
@@ -999,19 +1178,14 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
     for (NSUInteger i = 0; i < maxLen; i++) {
         int p1 = (i < [parts1 count]) ? [parts1[i] intValue] : 0;
         int p2 = (i < [parts2 count]) ? [parts2[i] intValue] : 0;
-        if (p1 < p2) return YES;   // v1 is older — update needed
-        if (p1 > p2) return NO;    // v1 is newer — no update
+        if (p1 < p2) return YES;
+        if (p1 > p2) return NO;
     }
-    return NO; // Equal — no update needed
+    return NO;
 }
 
 #pragma mark - Send Status Helper
 
-/**
- * Sends unified status to JavaScript layer.
- * Format: { status, progress, message, filePath }
- * Matches Android callback format for cross-platform consistency.
- */
 - (void)sendStatusWithCallbackId:(NSString *)callbackId
                           status:(NSString *)status
                         progress:(int)progress
@@ -1037,16 +1211,8 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
           keepCallback ? @" keep=YES" : @"");
 }
 
-#pragma mark - ⭐ Keychain Helpers (Persistent UUID Storage)
+#pragma mark - Keychain Helpers
 
-/**
- * Save string value to iOS Keychain.
- * Data persists across app reinstalls.
- * Uses kSecClassGenericPassword with:
- *   - kSecAttrAccount:    key name
- *   - kSecAttrService:    app bundle identifier (scoping)
- *   - kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlock
- */
 - (BOOL)keychainSave:(NSString *)key value:(NSString *)value {
 
     NSData *data = [value dataUsingEncoding:NSUTF8StringEncoding];
@@ -1063,10 +1229,9 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
         (__bridge id)kSecAttrAccount: key,
         (__bridge id)kSecAttrAccessible: (__bridge id)kSecAttrAccessibleAfterFirstUnlock
     };
-        // Delete existing item first to prevent errSecDuplicateItem (-25299)
+
     SecItemDelete((__bridge CFDictionaryRef)query);
 
-    // Add new item with value data
     NSMutableDictionary *addQuery = [query mutableCopy];
     addQuery[(__bridge id)kSecValueData] = data;
 
@@ -1081,10 +1246,6 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
     }
 }
 
-/**
- * Read string value from iOS Keychain.
- * Returns nil if key does not exist or cannot be read.
- */
 - (NSString *)keychainRead:(NSString *)key {
 
     NSString *service = [[NSBundle mainBundle] bundleIdentifier] ?: @"com.enterprise.appstore";
@@ -1107,17 +1268,12 @@ static NSTimeInterval  const kModelCacheTTL = 30 * 24 * 60 * 60; // 30 days
     }
 
     if (status != errSecItemNotFound) {
-        // Log unexpected errors (errSecItemNotFound is normal for first run)
         NSLog(@"[KeychainHelper] read: key='%@' failed with OSStatus %d", key, (int)status);
     }
 
     return nil;
 }
 
-/**
- * Delete value from iOS Keychain.
- * Returns YES if deleted or did not exist.
- */
 - (BOOL)keychainDelete:(NSString *)key {
 
     NSString *service = [[NSBundle mainBundle] bundleIdentifier] ?: @"com.enterprise.appstore";
