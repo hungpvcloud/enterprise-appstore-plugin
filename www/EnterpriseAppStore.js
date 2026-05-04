@@ -297,20 +297,143 @@ var EnterpriseAppStore = {
             [packageNameOrScheme.trim()]);
     },
     
-    setBadgeNumber: function (count, success, error) {
-        // Normalize input
-        if (typeof count !== "number") {
-            count = parseInt(count, 10) || 0;
+    // ════════════════════════════════════════════════════════
+    // 11. SET BADGE NUMBER — Multi-vendor compatible
+    // ────────────────────────────────────────────────────────
+    // Set the app icon badge number on the home screen.
+    //
+    // ── Android ─────────────────────────────────────────────
+    //   Uses multi-strategy approach for maximum compatibility:
+    //     1. Android 8+ Notification Badge (standard)
+    //     2. Vendor-specific methods (Samsung, Huawei, Xiaomi,
+    //        OPPO, vivo, ZTE, Sony, HTC, ASUS)
+    //     3. Generic broadcast fallback (Nova Launcher, etc.)
+    //
+    //   count: 0     = clear badge
+    //   count: 1-999 = set badge number
+    //
+    //   ⚠️ Android 13+ (API 33) requires POST_NOTIFICATIONS
+    //      permission for notification-based badge to work.
+    //      Make sure your app requests this permission.
+    //
+    //   Success: {
+    //     badge:        number,
+    //     manufacturer: string,   // e.g. "samsung"
+    //     model:        string,   // e.g. "SM-S931B"
+    //     sdkVersion:   number,   // e.g. 35
+    //     strategies:   string[], // e.g. ["notification_badge","samsung","generic_broadcast"]
+    //     success:      true
+    //   }
+    //
+    //   Error: {
+    //     badge:        number,
+    //     manufacturer: string,
+    //     model:        string,
+    //     sdkVersion:   number,
+    //     strategies:   string[],
+    //     success:      false,
+    //     error:        string
+    //   }
+    //   — OR —
+    //   "SET_BADGE_ERROR: ..."
+    //   "LAUNCHER_NOT_FOUND"
+    //
+    // ── iOS ─────────────────────────────────────────────────
+    //   Uses UIApplication.applicationIconBadgeNumber
+    //   Always works (no special permission needed on iOS < 16)
+    //
+    //   ⚠️ iOS 16+ may require notification authorization
+    //      for badge to be visible.
+    //
+    //   count: 0     = clear badge
+    //   count: 1-999 = set badge number
+    //
+    //   Success: {
+    //     badge:    number,
+    //     platform: "ios"
+    //   }
+    //
+    //   Error: "SET_BADGE_ERROR: ..."
+    // ════════════════════════════════════════════════════════
+    setBadgeNumber: function(count, successCallback, errorCallback) {
+        // Normalize input: ensure count is a non-negative integer
+        if (typeof count !== 'number') {
+            count = parseInt(count, 10);
+        }
+        if (isNaN(count) || count < 0) {
+            count = 0;
+        }
+        // Clamp to reasonable maximum (some launchers have limits)
+        if (count > 9999) {
+            count = 9999;
         }
 
         exec(
-            success,
-            error,
-            "EnterpriseAppStore",   // class name native
-            "setBadgeNumber",       // action name
-            [count]                 // arguments
+            successCallback,
+            errorCallback,
+            'EnterpriseAppStore',
+            'setBadgeNumber',
+            [count]
         );
     },
+
+    // ════════════════════════════════════════════════════════
+    // 12. CLEAR BADGE — Convenience method
+    // ────────────────────────────────────────────────────────
+    // Shorthand for setBadgeNumber(0)
+    // Clears the badge from the app icon.
+    //
+    // Both platforms: removes badge completely.
+    // On Android, also cancels the silent badge notification.
+    // ════════════════════════════════════════════════════════
+    clearBadge: function(successCallback, errorCallback) {
+        EnterpriseAppStore.setBadgeNumber(0, successCallback, errorCallback);
+    },
+    // ════════════════════════════════════════════════════════
+    // 13. CHECK STORAGE PERMISSION
+    // ────────────────────────────────────────────────────────
+    // Android: checks storage permission based on SDK version
+    //          SDK 30+ (Android 11+): MANAGE_EXTERNAL_STORAGE
+    //          SDK 23-29: WRITE_EXTERNAL_STORAGE
+    //          SDK < 23: always true
+    // ────────────────────────────────────────────────────────
+    // iOS:     not applicable, returns { hasPermission: true }
+    // ────────────────────────────────────────────────────────
+    // Returns: { hasPermission: bool, sdkVersion: number }
+    // ════════════════════════════════════════════════════════
+    checkStoragePermission: function(successCallback, errorCallback) {
+        if (EnterpriseAppStore._isAndroid()) {
+            exec(successCallback, errorCallback,
+                'EnterpriseAppStore', 'checkStoragePermission', []);
+        } else {
+            if (typeof successCallback === 'function') {
+                successCallback({ hasPermission: true, sdkVersion: 0 });
+            }
+        }
+    },
+
+    // ════════════════════════════════════════════════════════
+    // 14. REQUEST STORAGE PERMISSION
+    // ────────────────────────────────────────────────────────
+    // Android: requests storage permission
+    //          SDK 30+: opens MANAGE_EXTERNAL_STORAGE settings
+    //          SDK 23-29: runtime permission dialog
+    // ────────────────────────────────────────────────────────
+    // iOS:     not applicable, returns success immediately
+    // ════════════════════════════════════════════════════════
+    requestStoragePermission: function(successCallback, errorCallback) {
+        if (EnterpriseAppStore._isAndroid()) {
+            exec(successCallback, errorCallback,
+                'EnterpriseAppStore', 'requestStoragePermission', []);
+        } else {
+            if (typeof successCallback === 'function') {
+                successCallback({
+                    status: 'PERMISSION_NOT_NEEDED',
+                    hasPermission: true
+                });
+            }
+        }
+    }
 
 };
 
