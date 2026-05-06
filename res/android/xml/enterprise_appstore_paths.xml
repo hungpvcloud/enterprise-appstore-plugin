@@ -15,5 +15,7 @@
     <!-- <external-path
         name="enterprise_apk_public_downloads"
         path="Download/" /> -->
+    <!-- Cache directory -->
+    <cache-path name="cache" path="." />
 
 </paths>
