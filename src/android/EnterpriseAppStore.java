@@ -1277,11 +1277,24 @@ public class EnterpriseAppStore extends CordovaPlugin {
             result.put("success", anySuccess);
             result.put("updateCounter", badgeUpdateCounter);
 
-            if (anySuccess) {
-                cb.success(result);
+           if (anySuccess) {
+                // Use PluginResult instead of cb.success()
+                // This ensures clean callback lifecycle
+                PluginResult pluginResult = new PluginResult(
+                        PluginResult.Status.OK, result);
+                pluginResult.setKeepCallback(false);
+                cb.sendPluginResult(pluginResult);
+                
+                Log.d(TAG, "setBadgeNumber: success, count=" + count
+                        + " strategies=" + appliedStrategies.toString());
             } else {
                 result.put("error", "No badge strategy worked");
-                cb.error(result);
+                PluginResult pluginResult = new PluginResult(
+                        PluginResult.Status.ERROR, result);
+                pluginResult.setKeepCallback(false);
+                cb.sendPluginResult(pluginResult);
+                
+                Log.e(TAG, "setBadgeNumber: all strategies failed");
             }
 
         } catch (Exception e) {
