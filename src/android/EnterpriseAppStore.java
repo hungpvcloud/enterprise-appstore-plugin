@@ -1260,11 +1260,12 @@ public class EnterpriseAppStore extends CordovaPlugin {
 
             // Xiaomi / Redmi / POCO
             else if (manufacturer.contains("xiaomi")
+                    || manufacturer.contains("Xiaomi")
                     || manufacturer.contains("redmi")
                     || manufacturer.contains("poco")) {
                 try {
                     setBadgeXiaomi(context, count, packageName, launcherClass);
-                    appliedStrategies.put("xiaomi");
+                    appliedStrategies.put(manufacturer.contains("xiaomi")?"xiaomi":"Xiaomi");
                     anySuccess = true;
                 } catch (Exception e) {
                     Log.w(TAG, "setBadgeNumber: xiaomi method failed: "
