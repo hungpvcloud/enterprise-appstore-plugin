@@ -36,7 +36,7 @@
             <uses-permission android:name="android.permission.INTERNET" />
             <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
             <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
-            <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+            <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />            
             
             <!-- Legacy permissions for Android 9 down -->
             <uses-permission
@@ -45,6 +45,37 @@
             <uses-permission
                 android:name="android.permission.READ_EXTERNAL_STORAGE"
                 android:maxSdkVersion="32" />
+
+             <!-- Samsung (OneUI / TouchWiz) -->
+            <uses-permission android:name="com.sec.android.provider.badge.permission.READ" />
+            <uses-permission android:name="com.sec.android.provider.badge.permission.WRITE" />
+
+            <!-- Huawei / Honor (EMUI) -->
+            <uses-permission android:name="com.huawei.android.launcher.permission.CHANGE_BADGE" />
+            <uses-permission android:name="com.huawei.android.launcher.permission.READ_SETTINGS" />
+            <uses-permission android:name="com.huawei.android.launcher.permission.WRITE_SETTINGS" />
+
+            <!-- OPPO / Realme / OnePlus (ColorOS) -->
+            <uses-permission android:name="com.oppo.launcher.permission.READ_SETTINGS" />
+            <uses-permission android:name="com.oppo.launcher.permission.WRITE_SETTINGS" />
+
+            <!-- vivo / iQOO (FuntouchOS / OriginOS) -->
+            <uses-permission android:name="com.vivo.notification.permission.BADGE_ICON" />
+
+            <!-- HTC (Sense) -->
+            <uses-permission android:name="com.htc.launcher.permission.READ_SETTINGS" />
+            <uses-permission android:name="com.htc.launcher.permission.UPDATE_SHORTCUT" />
+
+            <!-- Sony (Xperia) -->
+            <uses-permission android:name="com.sonymobile.home.permission.PROVIDER_INSERT_BADGE" />
+            <uses-permission android:name="com.sonyericsson.home.permission.BROADCAST_BADGE" />
+            <uses-permission android:name="com.sonymobile.home.permission.BADGE_COUNT_READ" />
+
+            <!-- ASUS (ZenUI) -->
+            <uses-permission android:name="com.asus.launcher.permission.WRITE_BADGE" />
+
+            <!-- ZTE -->
+            <uses-permission android:name="android.permission.READ_APP_BADGE" />
         </config-file>
 
         <!-- FileProvider -->
@@ -124,7 +155,7 @@
             </array>
         </config-file>
 
-        <!-- ⭐ Source file: Objective-C (no Swift version issues!) -->
+        <!-- Source file: Objective-C (no Swift version issues!) -->
         <header-file src="src/ios/EnterpriseAppStore.h" />
         <source-file src="src/ios/EnterpriseAppStore.m" />
 
