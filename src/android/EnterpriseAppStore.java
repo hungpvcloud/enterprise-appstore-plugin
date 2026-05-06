@@ -48,15 +48,15 @@ public class EnterpriseAppStore extends CordovaPlugin {
     // ════════════════════════════════════════════════════════
     // CONSTANTS & FIELDS
     // ════════════════════════════════════════════════════════
-    private static final String TAG                  = "EnterpriseAppStore";
-    private static final int    REQUEST_INSTALL_PERM = 1001;
-    private static final int    REQUEST_STORAGE_PERM = 1002;
-    private static final int    POLL_INTERVAL_MS     = 800;
-    private static final int    MAX_POLL_COUNT       = 1500; // ~20 min
+    private static final String TAG                   = "EnterpriseAppStore";
+    private static final int    REQUEST_INSTALL_PERM  = 1001;
+    private static final int    REQUEST_STORAGE_PERM  = 1002;
+    private static final int    POLL_INTERVAL_MS      = 800;
+    private static final int    MAX_POLL_COUNT        = 1500; // ~20 min
 
     // Badge notification channel & ID
-    private static final String BADGE_CHANNEL_ID     = "badge_channel";
-    private static final String BADGE_CHANNEL_NAME   = "App Badge";
+    private static final String BADGE_CHANNEL_ID      = "badge_channel";
+    private static final String BADGE_CHANNEL_NAME    = "App Badge";
     private static final int    BADGE_NOTIFICATION_ID = 9999;
 
     // Download state
@@ -558,7 +558,7 @@ public class EnterpriseAppStore extends CordovaPlugin {
 
             Log.d(TAG, "Starting install activity...");
             context.startActivity(intent);
-            Log.d(TAG, "Install activity started ✅");
+            Log.d(TAG, "Install activity started");
 
             sendStatus(callbackContext, "INSTALL_PROMPT", 100,
                     "Installation dialog opened.", filePath, false);
@@ -777,7 +777,7 @@ public class EnterpriseAppStore extends CordovaPlugin {
 
             context.startActivity(launchIntent);
 
-            Log.d(TAG, "openApp: Successfully launched " + packageName + " ✅");
+            Log.d(TAG, "openApp: Successfully launched " + packageName);
 
             JSONObject result = new JSONObject();
             result.put("success",     true);
@@ -1177,25 +1177,16 @@ public class EnterpriseAppStore extends CordovaPlugin {
     }
 
     // ════════════════════════════════════════════════════════
-    // SET BADGE NUMBER — Multi-vendor compatible
-    // Supports: Samsung, Huawei, Xiaomi, OPPO, vivo, ZTE,
-    //           Sony, HTC, ASUS, and standard Android 8+ badge
+    // SET BADGE NUMBER
+    // Multi-vendor: Samsung, Huawei, Xiaomi/HyperOS, OPPO,
+    //               vivo, ZTE, Sony, HTC, ASUS, generic
     // ════════════════════════════════════════════════════════
-
-    /**
-     * Main entry point for setting the badge number.
-     * Uses a multi-strategy approach:
-     *   1. Android 8+ Notification Badge (standard, works on most devices)
-     *   2. Vendor-specific broadcast intents (for launchers that use them)
-     *   3. Fallback strategies for maximum compatibility
-     */
     private void setBadgeNumber(int count, CallbackContext callbackContext) {
         try {
-            Context context = cordova.getContext();
+            Context context    = cordova.getContext();
             String packageName = context.getPackageName();
-
-            // Resolve launcher activity class name
             String launcherClass = getLauncherClassName();
+
             if (launcherClass == null) {
                 Log.e(TAG, "setBadgeNumber: launcher class not found");
                 callbackContext.error("LAUNCHER_NOT_FOUND");
@@ -1208,73 +1199,51 @@ public class EnterpriseAppStore extends CordovaPlugin {
                     + " pkg=" + packageName
                     + " launcher=" + launcherClass);
 
-            // Track which strategies succeeded
             JSONArray appliedStrategies = new JSONArray();
             boolean anySuccess = false;
 
-            // ─────────────────────────────────────────────
-            // Strategy 1: Android 8+ Notification Badge
-            // This is the STANDARD method and works on most
-            // modern devices including Samsung S25 (OneUI 7)
-            // ─────────────────────────────────────────────
+            // ── Strategy 1: Android 8+ standard notification badge ──
+            // Most reliable for modern devices (Samsung OneUI 6+, Pixel, etc.)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 try {
                     setNotificationBadge(context, count);
                     appliedStrategies.put("notification_badge");
                     anySuccess = true;
-                    Log.d(TAG, "setBadgeNumber: notification badge set ✅");
+                    Log.d(TAG, "Notification badge set");
                 } catch (Exception e) {
-                    Log.w(TAG, "setBadgeNumber: notification badge failed: "
-                            + e.getMessage());
+                    Log.w(TAG, "Notification badge failed: " + e.getMessage());
                 }
             }
 
-            // ─────────────────────────────────────────────
-            // Strategy 2: Vendor-specific broadcast intents
-            // ─────────────────────────────────────────────
-
-            // Samsung (all versions including OneUI 6/7)
+            // ── Strategy 2: Vendor-specific methods ──
             if (manufacturer.contains("samsung")) {
                 try {
                     setBadgeSamsung(context, count, packageName, launcherClass);
                     appliedStrategies.put("samsung");
                     anySuccess = true;
                 } catch (Exception e) {
-                    Log.w(TAG, "setBadgeNumber: samsung method failed: "
-                            + e.getMessage());
+                    Log.w(TAG, "Samsung method failed: " + e.getMessage());
                 }
-            }
-
-            // Huawei / Honor
-            else if (manufacturer.contains("huawei")
+            } else if (manufacturer.contains("huawei")
                     || manufacturer.contains("honor")) {
                 try {
                     setBadgeHuawei(context, count, packageName, launcherClass);
                     appliedStrategies.put("huawei");
                     anySuccess = true;
                 } catch (Exception e) {
-                    Log.w(TAG, "setBadgeNumber: huawei method failed: "
-                            + e.getMessage());
+                    Log.w(TAG, "Huawei method failed: " + e.getMessage());
                 }
-            }
-
-            // Xiaomi / Redmi / POCO
-            else if (manufacturer.contains("xiaomi")
-                    || manufacturer.contains("Xiaomi")
+            } else if (manufacturer.contains("xiaomi")
                     || manufacturer.contains("redmi")
                     || manufacturer.contains("poco")) {
                 try {
                     setBadgeXiaomi(context, count, packageName, launcherClass);
-                    appliedStrategies.put(manufacturer.contains("xiaomi")?"xiaomi":"Xiaomi");
+                    appliedStrategies.put("xiaomi");
                     anySuccess = true;
                 } catch (Exception e) {
-                    Log.w(TAG, "setBadgeNumber: xiaomi method failed: "
-                            + e.getMessage());
+                    Log.w(TAG, "Xiaomi method failed: " + e.getMessage());
                 }
-            }
-
-            // OPPO / Realme / OnePlus (ColorOS / OxygenOS)
-            else if (manufacturer.contains("oppo")
+            } else if (manufacturer.contains("oppo")
                     || manufacturer.contains("realme")
                     || manufacturer.contains("oneplus")) {
                 try {
@@ -1282,102 +1251,72 @@ public class EnterpriseAppStore extends CordovaPlugin {
                     appliedStrategies.put("oppo");
                     anySuccess = true;
                 } catch (Exception e) {
-                    Log.w(TAG, "setBadgeNumber: oppo method failed: "
-                            + e.getMessage());
+                    Log.w(TAG, "OPPO method failed: " + e.getMessage());
                 }
-            }
-
-            // vivo / iQOO
-            else if (manufacturer.contains("vivo")
+            } else if (manufacturer.contains("vivo")
                     || manufacturer.contains("iqoo")) {
                 try {
                     setBadgeVivo(context, count, packageName, launcherClass);
                     appliedStrategies.put("vivo");
                     anySuccess = true;
                 } catch (Exception e) {
-                    Log.w(TAG, "setBadgeNumber: vivo method failed: "
-                            + e.getMessage());
+                    Log.w(TAG, "vivo method failed: " + e.getMessage());
                 }
-            }
-
-            // ZTE
-            else if (manufacturer.contains("zte")) {
+            } else if (manufacturer.contains("zte")) {
                 try {
                     setBadgeZTE(context, count, packageName, launcherClass);
                     appliedStrategies.put("zte");
                     anySuccess = true;
                 } catch (Exception e) {
-                    Log.w(TAG, "setBadgeNumber: zte method failed: "
-                            + e.getMessage());
+                    Log.w(TAG, "ZTE method failed: " + e.getMessage());
                 }
-            }
-
-            // Sony
-            else if (manufacturer.contains("sony")) {
+            } else if (manufacturer.contains("sony")) {
                 try {
                     setBadgeSony(context, count, packageName, launcherClass);
                     appliedStrategies.put("sony");
                     anySuccess = true;
                 } catch (Exception e) {
-                    Log.w(TAG, "setBadgeNumber: sony method failed: "
-                            + e.getMessage());
+                    Log.w(TAG, "Sony method failed: " + e.getMessage());
                 }
-            }
-
-            // HTC
-            else if (manufacturer.contains("htc")) {
+            } else if (manufacturer.contains("htc")) {
                 try {
                     setBadgeHTC(context, count, packageName, launcherClass);
                     appliedStrategies.put("htc");
                     anySuccess = true;
                 } catch (Exception e) {
-                    Log.w(TAG, "setBadgeNumber: htc method failed: "
-                            + e.getMessage());
+                    Log.w(TAG, "HTC method failed: " + e.getMessage());
                 }
-            }
-
-            // ASUS
-            else if (manufacturer.contains("asus")) {
+            } else if (manufacturer.contains("asus")) {
                 try {
                     setBadgeASUS(context, count, packageName, launcherClass);
                     appliedStrategies.put("asus");
                     anySuccess = true;
                 } catch (Exception e) {
-                    Log.w(TAG, "setBadgeNumber: asus method failed: "
-                            + e.getMessage());
+                    Log.w(TAG, "ASUS method failed: " + e.getMessage());
                 }
             }
 
-            // ─────────────────────────────────────────────
-            // Strategy 3: Generic fallback broadcast
-            // Some third-party launchers (Nova, Action, etc.)
-            // listen to the generic BadgeProvider
-            // ─────────────────────────────────────────────
+            // ── Strategy 3: Generic broadcast (Nova, Action, etc.) ──
             try {
-                setBadgeGenericBroadcast(context, count,
-                        packageName, launcherClass);
+                setBadgeGenericBroadcast(context, count, packageName, launcherClass);
                 appliedStrategies.put("generic_broadcast");
                 anySuccess = true;
             } catch (Exception e) {
-                Log.w(TAG, "setBadgeNumber: generic broadcast failed: "
-                        + e.getMessage());
+                Log.w(TAG, "Generic broadcast failed: " + e.getMessage());
             }
 
-            // ─────────────────────────────────────────────
-            // Build response
-            // ─────────────────────────────────────────────
             JSONObject result = new JSONObject();
-            result.put("badge", count);
+            result.put("badge",        count);
             result.put("manufacturer", Build.MANUFACTURER);
-            result.put("model", Build.MODEL);
-            result.put("sdkVersion", Build.VERSION.SDK_INT);
-            result.put("strategies", appliedStrategies);
-            result.put("success", anySuccess);
+            result.put("model",        Build.MODEL);
+            result.put("sdkVersion",   Build.VERSION.SDK_INT);
+            result.put("strategies",   appliedStrategies);
+            result.put("success",      anySuccess);
 
             if (anySuccess) {
                 callbackContext.success(result);
-                Log.d(TAG, "setBadgeNumber: success, count=" + count
-                        + " strategies=" + appliedStrategies.toString());
+                Log.d(TAG, "setBadgeNumber: success count=" + count
+                        + " strategies=" + appliedStrategies);
             } else {
                 result.put("error", "No badge strategy worked for this device");
                 callbackContext.error(result);
@@ -1386,102 +1325,96 @@ public class EnterpriseAppStore extends CordovaPlugin {
 
         } catch (Exception e) {
             Log.e(TAG, "setBadgeNumber error", e);
-            callbackContext.error(
-                "SET_BADGE_ERROR: " + e.getMessage()
-            );
+            callbackContext.error("SET_BADGE_ERROR: " + e.getMessage());
         }
     }
 
     // ════════════════════════════════════════════════════════
-    // BADGE STRATEGY: Android 8+ Notification Badge
-    // This is the most reliable method for modern Android.
-    // The system reads the notification count and displays
-    // it as a badge dot or number (depending on launcher).
-    // Samsung OneUI 6+ and Google Pixel fully support this.
+    // BADGE STRATEGY: Android 8+ standard notification badge
+    //
+    // FIX: Recreate channel if showBadge=false (cached wrongly).
+    //      Always cancel-then-repost so launchers read fresh badge.
     // ════════════════════════════════════════════════════════
     private void setNotificationBadge(Context context, int count) {
-        NotificationManager notificationManager =
-                (NotificationManager) context.getSystemService(
-                        Context.NOTIFICATION_SERVICE);
+        NotificationManager nm = (NotificationManager)
+                context.getSystemService(Context.NOTIFICATION_SERVICE);
 
-        if (count <= 0) {
-            // Remove badge by cancelling the notification
-            notificationManager.cancel(BADGE_NOTIFICATION_ID);
-            Log.d(TAG, "Notification badge cleared");
-            return;
-        }
-
-        // Create notification channel (required for Android 8+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = notificationManager
-                    .getNotificationChannel(BADGE_CHANNEL_ID);
+            NotificationChannel existing = nm.getNotificationChannel(BADGE_CHANNEL_ID);
 
-            if (channel == null) {
-                channel = new NotificationChannel(
+            // If channel exists but showBadge is false, recreate it.
+            // Channel settings are cached after first creation,
+            // so we must delete and recreate to fix the flag.
+            if (existing != null && !existing.canShowBadge()) {
+                Log.w(TAG, "Channel showBadge=false, recreating channel");
+                nm.deleteNotificationChannel(BADGE_CHANNEL_ID);
+                existing = null;
+            }
+
+            if (existing == null) {
+                NotificationChannel channel = new NotificationChannel(
                         BADGE_CHANNEL_ID,
                         BADGE_CHANNEL_NAME,
-                        NotificationManager.IMPORTANCE_DEFAULT
+                        NotificationManager.IMPORTANCE_MIN // No sound/heads-up
                 );
-                // Enable badge for this channel
                 channel.setShowBadge(true);
-                // Minimize visual/audio disturbance
                 channel.setSound(null, null);
                 channel.enableVibration(false);
                 channel.enableLights(false);
-                notificationManager.createNotificationChannel(channel);
-                Log.d(TAG, "Badge notification channel created");
+                nm.createNotificationChannel(channel);
+                Log.d(TAG, "Badge channel created");
             }
         }
 
-        // Build a silent notification that carries the badge count
+        // Delegate to the cancel-then-repost helper
+        postOrCancelBadgeNotification(context, count);
+    }
+
+    // ════════════════════════════════════════════════════════
+    // HELPER: Cancel existing badge notification, then post new one.
+    //
+    // ROOT CAUSE of "only works first time":
+    //   Some launchers (Xiaomi, OPPO, vivo) only read badge number
+    //   from a NEW notification. Updating same notification ID in-place
+    //   does not trigger a badge refresh. Cancelling first forces
+    //   the launcher to treat the next notify() as a fresh badge event.
+    // ════════════════════════════════════════════════════════
+    private void postOrCancelBadgeNotification(Context context, int count) {
+        NotificationManager nm = (NotificationManager)
+                context.getSystemService(Context.NOTIFICATION_SERVICE);
+
+        // Always cancel first to force fresh badge read by launcher
+        nm.cancel(BADGE_NOTIFICATION_ID);
+
+        if (count <= 0) {
+            Log.d(TAG, "Badge cleared");
+            return;
+        }
+
         NotificationCompat.Builder builder =
                 new NotificationCompat.Builder(context, BADGE_CHANNEL_ID)
                         .setSmallIcon(getAppIconResourceId(context))
                         .setContentTitle("")
                         .setContentText("")
-                        // Set the badge number explicitly
-                        .setNumber(count)
-                        // Make it as unobtrusive as possible
+                        .setNumber(count)                             // Standard badge count
                         .setPriority(NotificationCompat.PRIORITY_MIN)
                         .setSilent(true)
                         .setOngoing(false)
                         .setAutoCancel(false)
-                        // Group to collapse multiple notifications
+                        .setVisibility(NotificationCompat.VISIBILITY_SECRET) // Hide from lockscreen
                         .setGroup("badge_group")
                         .setGroupSummary(true);
 
-        notificationManager.notify(BADGE_NOTIFICATION_ID, builder.build());
-        Log.d(TAG, "Notification badge set: count=" + count);
-    }
-
-    /**
-     * Get the app's launcher icon resource ID.
-     * Falls back to the default Android icon if not found.
-     */
-    private int getAppIconResourceId(Context context) {
-        try {
-            return context.getPackageManager()
-                    .getApplicationInfo(context.getPackageName(), 0)
-                    .icon;
-        } catch (PackageManager.NameNotFoundException e) {
-            Log.w(TAG, "App icon not found, using default");
-            return android.R.drawable.ic_dialog_info;
-        }
+        nm.notify(BADGE_NOTIFICATION_ID, builder.build());
+        Log.d(TAG, "Badge notification posted: count=" + count);
     }
 
     // ════════════════════════════════════════════════════════
     // BADGE STRATEGY: Samsung (OneUI / TouchWiz)
-    // Supports both legacy BadgeProvider and new broadcasts.
-    // Samsung S25 (OneUI 7) primarily uses notification badge,
-    // but we also try the ContentProvider method for older
-    // Samsung devices.
     // ════════════════════════════════════════════════════════
     private void setBadgeSamsung(Context context, int count,
-                                 String packageName,
-                                 String launcherClass) {
-
+                                 String packageName, String launcherClass) {
         // Method 1: Samsung BadgeProvider ContentResolver
-        // This works on Samsung devices with OneUI / TouchWiz
         try {
             Uri uri = Uri.parse("content://com.sec.badge/apps");
             ContentValues cv = new ContentValues();
@@ -1490,26 +1423,19 @@ public class EnterpriseAppStore extends CordovaPlugin {
             cv.put("badgecount", count);
 
             Cursor cursor = context.getContentResolver().query(
-                    uri, null, "package=?",
-                    new String[]{packageName}, null);
+                    uri, null, "package=?", new String[]{packageName}, null);
 
             if (cursor != null) {
                 if (cursor.moveToFirst()) {
-                    // Update existing record
                     if (count > 0) {
                         context.getContentResolver().update(
-                                uri, cv, "package=?",
-                                new String[]{packageName});
+                                uri, cv, "package=?", new String[]{packageName});
                     } else {
                         context.getContentResolver().delete(
-                                uri, "package=?",
-                                new String[]{packageName});
+                                uri, "package=?", new String[]{packageName});
                     }
-                } else {
-                    // Insert new record
-                    if (count > 0) {
-                        context.getContentResolver().insert(uri, cv);
-                    }
+                } else if (count > 0) {
+                    context.getContentResolver().insert(uri, cv);
                 }
                 cursor.close();
             }
@@ -1518,14 +1444,12 @@ public class EnterpriseAppStore extends CordovaPlugin {
             Log.w(TAG, "Samsung BadgeProvider failed: " + e.getMessage());
         }
 
-        // Method 2: Legacy Samsung broadcast
-        // Still works on some older Samsung devices
+        // Method 2: Legacy Samsung broadcast (older devices)
         try {
-            Intent intent = new Intent(
-                    "android.intent.action.BADGE_COUNT_UPDATE");
-            intent.putExtra("badge_count", count);
+            Intent intent = new Intent("android.intent.action.BADGE_COUNT_UPDATE");
+            intent.putExtra("badge_count",              count);
             intent.putExtra("badge_count_package_name", packageName);
-            intent.putExtra("badge_count_class_name", launcherClass);
+            intent.putExtra("badge_count_class_name",   launcherClass);
             context.sendBroadcast(intent);
             Log.d(TAG, "Samsung broadcast sent: " + count);
         } catch (Exception e) {
@@ -1534,191 +1458,209 @@ public class EnterpriseAppStore extends CordovaPlugin {
     }
 
     // ════════════════════════════════════════════════════════
-    // BADGE STRATEGY: Huawei / Honor (EMUI)
-    // Uses the Huawei Badge ContentProvider
+    // BADGE STRATEGY: Huawei / Honor (EMUI / MagicUI)
     // ════════════════════════════════════════════════════════
     private void setBadgeHuawei(Context context, int count,
-                                String packageName,
-                                String launcherClass) {
+                                String packageName, String launcherClass) {
+        // Method 1: ContentResolver call
         try {
             android.os.Bundle bundle = new android.os.Bundle();
-            bundle.putString("package", packageName);
-            bundle.putString("class", launcherClass);
-            bundle.putInt("badgenumber", count);
+            bundle.putString("package",     packageName);
+            bundle.putString("class",       launcherClass);
+            bundle.putInt("badgenumber",    count);
 
             context.getContentResolver().call(
-                    Uri.parse("content://com.huawei.android.launcher"
-                            + ".settings/badge/"),
+                    Uri.parse("content://com.huawei.android.launcher.settings/badge/"),
                     "change_badge", null, bundle);
 
             Log.d(TAG, "Huawei badge set: " + count);
         } catch (Exception e) {
-            Log.w(TAG, "Huawei badge failed: " + e.getMessage());
-            // Fallback: Try broadcast method
+            Log.w(TAG, "Huawei ContentResolver failed: " + e.getMessage());
+
+            // Method 2: Broadcast fallback
             try {
                 Intent intent = new Intent(
                         "com.huawei.android.launcher.action.UPDATE_BADGENUMBER");
                 intent.putExtra("badge_number", count);
                 intent.putExtra("package_name", packageName);
-                intent.putExtra("class_name", launcherClass);
+                intent.putExtra("class_name",   launcherClass);
                 intent.setComponent(new ComponentName(
                         "com.huawei.android.launcher",
                         "com.huawei.android.launcher.LauncherProvider"));
                 context.sendBroadcast(intent);
                 Log.d(TAG, "Huawei broadcast fallback sent: " + count);
             } catch (Exception e2) {
-                Log.w(TAG, "Huawei broadcast fallback also failed: "
-                        + e2.getMessage());
-                throw e; // Re-throw original exception
+                Log.w(TAG, "Huawei broadcast fallback failed: " + e2.getMessage());
+                throw e;
             }
         }
+
+        // Always cancel-then-repost for Huawei to refresh badge count
+        postOrCancelBadgeNotification(context, count);
     }
 
     // ════════════════════════════════════════════════════════
     // BADGE STRATEGY: Xiaomi / Redmi / POCO (MIUI / HyperOS)
-    // Uses the MIUI notification badge API via reflection
+    //
+    // FIX: Added broadcast intents for MIUI & HyperOS.
+    //      Reflection limited to API < 29 (not available on HyperOS).
+    //      Uses cancel-then-repost to fix "only first time" bug.
     // ════════════════════════════════════════════════════════
     private void setBadgeXiaomi(Context context, int count,
-                                String packageName,
-                                String launcherClass) {
-        // Xiaomi MIUI uses the notification badge number field.
-        // The system reads notification.number to display the badge.
-        // This is already handled by setNotificationBadge(),
-        // but we also try the MIUI-specific field for older versions.
-
+                                String packageName, String launcherClass) {
+        // Step 1: MIUI launcher broadcast (MIUI 6+ to MIUI 14)
         try {
-            // Try to set via MIUI notification extra field
-            // This ensures badge works even on older MIUI versions
-            NotificationManager nm = (NotificationManager)
-                    context.getSystemService(Context.NOTIFICATION_SERVICE);
+            Intent miuiIntent = new Intent("com.miui.home.launcher.action.UPDATE_BADGE");
+            miuiIntent.putExtra("update_badge_component",
+                    new ComponentName(packageName, launcherClass));
+            miuiIntent.putExtra("update_badge_count", count);
+            context.sendBroadcast(miuiIntent);
+            Log.d(TAG, "Xiaomi MIUI broadcast sent: " + count);
+        } catch (Exception e) {
+            Log.w(TAG, "Xiaomi MIUI broadcast failed: " + e.getMessage());
+        }
 
-            // Create notification with MIUI-specific extras
-            Notification.Builder builder;
+        // Step 2: HyperOS launcher broadcast (Xiaomi 2023+ / HyperOS 1+)
+        try {
+            Intent hyperIntent = new Intent("android.intent.action.BADGE_COUNT_UPDATE");
+            hyperIntent.putExtra("badge_count",              count);
+            hyperIntent.putExtra("badge_count_package_name", packageName);
+            hyperIntent.putExtra("badge_count_class_name",   launcherClass);
+            context.sendBroadcast(hyperIntent);
+            Log.d(TAG, "Xiaomi HyperOS broadcast sent: " + count);
+        } catch (Exception e) {
+            Log.w(TAG, "Xiaomi HyperOS broadcast failed: " + e.getMessage());
+        }
+
+        // Step 3: Notification-based badge (MIUI reads setNumber() from notification)
+        // Ensure channel is set up correctly, then cancel-then-repost
+        try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                // Ensure channel exists
                 setNotificationBadge(context, count);
-
-                builder = new Notification.Builder(context, BADGE_CHANNEL_ID);
             } else {
-                builder = new Notification.Builder(context);
+                postOrCancelBadgeNotification(context, count);
             }
+        } catch (Exception e) {
+            Log.w(TAG, "Xiaomi notification badge failed: " + e.getMessage());
+        }
+
+        // Step 4: MIUI reflection (only on older MIUI, API < 29)
+        // HyperOS and MIUI 14+ removed extraNotification field
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            tryXiaomiReflection(context, count);
+        }
+
+        Log.d(TAG, "Xiaomi badge strategies applied: " + count);
+    }
+
+    // Attempt to set badge via MIUI-specific reflection (MIUI 8-12 only).
+    // Expected to fail on HyperOS — failure is silently logged.
+    private void tryXiaomiReflection(Context context, int count) {
+        try {
+            Notification.Builder builder =
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                            ? new Notification.Builder(context, BADGE_CHANNEL_ID)
+                            : new Notification.Builder(context);
 
             Notification notification = builder
                     .setSmallIcon(getAppIconResourceId(context))
-                    .setContentTitle("")
-                    .setContentText("")
                     .setNumber(count)
                     .build();
 
-            // Set MIUI-specific messageCount via reflection
-            try {
-                java.lang.reflect.Field field =
-                        notification.getClass().getDeclaredField("extraNotification");
-                Object extraNotification = field.get(notification);
-                if (extraNotification != null) {
-                    java.lang.reflect.Method method =
-                            extraNotification.getClass().getDeclaredMethod(
-                                    "setMessageCount", int.class);
-                    method.invoke(extraNotification, count);
-                    Log.d(TAG, "Xiaomi extraNotification.setMessageCount: "
-                            + count);
-                }
-            } catch (Exception reflectEx) {
-                // Reflection failed — this is expected on non-MIUI devices
-                // or newer HyperOS versions
-                Log.w(TAG, "Xiaomi reflection failed (expected on HyperOS): "
-                        + reflectEx.getMessage());
-            }
+            java.lang.reflect.Field field =
+                    notification.getClass().getDeclaredField("extraNotification");
+            field.setAccessible(true); // Required to access private field
+            Object extraNotification = field.get(notification);
 
-            if (count > 0) {
-                nm.notify(BADGE_NOTIFICATION_ID, notification);
-            } else {
-                nm.cancel(BADGE_NOTIFICATION_ID);
+            if (extraNotification != null) {
+                java.lang.reflect.Method method =
+                        extraNotification.getClass()
+                                .getDeclaredMethod("setMessageCount", int.class);
+                method.setAccessible(true);
+                method.invoke(extraNotification, count);
+                Log.d(TAG, "Xiaomi reflection setMessageCount=" + count);
             }
-
-            Log.d(TAG, "Xiaomi badge set: " + count);
         } catch (Exception e) {
-            Log.w(TAG, "Xiaomi badge failed: " + e.getMessage());
-            throw new RuntimeException(e);
+            // Expected on HyperOS / Android 10+ — ignore
+            Log.d(TAG, "Xiaomi reflection not available: " + e.getMessage());
         }
     }
 
     // ════════════════════════════════════════════════════════
     // BADGE STRATEGY: OPPO / Realme / OnePlus (ColorOS)
-    // Uses the OPPO badge ContentProvider or broadcast
+    //
+    // FIX: Added cancel-then-repost after broadcasts to ensure
+    //      badge refreshes on subsequent calls.
     // ════════════════════════════════════════════════════════
     private void setBadgeOPPO(Context context, int count,
-                              String packageName,
-                              String launcherClass) {
-
-        // Method 1: OPPO/ColorOS ContentProvider
+                              String packageName, String launcherClass) {
+        // Method 1: ColorOS ContentProvider
         try {
             android.os.Bundle extras = new android.os.Bundle();
             extras.putInt("app_badge_count", count);
-
             context.getContentResolver().call(
                     Uri.parse("content://com.android.badge/badge"),
                     "setAppBadgeCount", null, extras);
-
-            Log.d(TAG, "OPPO badge ContentProvider set: " + count);
+            Log.d(TAG, "OPPO ContentProvider set: " + count);
         } catch (Exception e) {
             Log.w(TAG, "OPPO ContentProvider failed: " + e.getMessage());
         }
 
-        // Method 2: Intent broadcast for OPPO
+        // Method 2: OPPO broadcast intent
         try {
-            Intent intent = new Intent(
-                    "com.oppo.unsettledevent");
-            intent.putExtra("pakeageName", packageName); // Note: OPPO typo is intentional
-            intent.putExtra("number", count);
+            Intent intent = new Intent("com.oppo.unsettledevent");
+            intent.putExtra("pakeageName",  packageName); // OPPO typo is intentional
+            intent.putExtra("packageName",  packageName);
+            intent.putExtra("number",       count);
             intent.putExtra("upgradeNumber", count);
-
-            // Also try the correct spelling
-            intent.putExtra("packageName", packageName);
             context.sendBroadcast(intent);
-
             Log.d(TAG, "OPPO broadcast sent: " + count);
         } catch (Exception e) {
             Log.w(TAG, "OPPO broadcast failed: " + e.getMessage());
         }
 
-        // Method 3: OnePlus / newer ColorOS uses standard notification badge
-        // Already handled by setNotificationBadge()
+        // Method 3: Cancel-then-repost notification
+        // Fixes "only first time" issue on ColorOS 13+ (OnePlus, Realme)
+        postOrCancelBadgeNotification(context, count);
     }
 
     // ════════════════════════════════════════════════════════
     // BADGE STRATEGY: vivo / iQOO (FuntouchOS / OriginOS)
+    //
+    // FIX: Added cancel-then-repost after broadcast.
     // ════════════════════════════════════════════════════════
     private void setBadgeVivo(Context context, int count,
-                              String packageName,
-                              String launcherClass) {
+                              String packageName, String launcherClass) {
+        // Method 1: FuntouchOS broadcast
         try {
             Intent intent = new Intent(
                     "launcher.action.CHANGE_APPLICATION_NOTIFICATION_NUM");
-            intent.putExtra("packageName", packageName);
-            intent.putExtra("className", launcherClass);
+            intent.putExtra("packageName",   packageName);
+            intent.putExtra("className",     launcherClass);
             intent.putExtra("notificationNum", count);
             context.sendBroadcast(intent);
-
-            Log.d(TAG, "vivo badge broadcast sent: " + count);
+            Log.d(TAG, "vivo broadcast sent: " + count);
         } catch (Exception e) {
-            Log.w(TAG, "vivo badge failed: " + e.getMessage());
-            throw new RuntimeException(e);
+            Log.w(TAG, "vivo broadcast failed: " + e.getMessage());
         }
+
+        // Method 2: OriginOS uses standard notification badge
+        // Cancel-then-repost fixes "only first time" on OriginOS 3+
+        postOrCancelBadgeNotification(context, count);
     }
 
     // ════════════════════════════════════════════════════════
     // BADGE STRATEGY: ZTE
+    //
+    // FIX: Added cancel-then-repost as fallback.
     // ════════════════════════════════════════════════════════
     private void setBadgeZTE(Context context, int count,
-                             String packageName,
-                             String launcherClass) {
+                             String packageName, String launcherClass) {
         try {
             android.os.Bundle extras = new android.os.Bundle();
             extras.putInt("app_badge_count", count);
             extras.putString("app_badge_component_name",
-                    new ComponentName(packageName, launcherClass)
-                            .flattenToString());
+                    new ComponentName(packageName, launcherClass).flattenToString());
 
             context.getContentResolver().call(
                     Uri.parse("content://com.android.launcher3.badge/badge"),
@@ -1726,125 +1668,135 @@ public class EnterpriseAppStore extends CordovaPlugin {
 
             Log.d(TAG, "ZTE badge set: " + count);
         } catch (Exception e) {
-            Log.w(TAG, "ZTE badge failed: " + e.getMessage());
-            throw new RuntimeException(e);
+            Log.w(TAG, "ZTE ContentProvider failed: " + e.getMessage());
         }
+
+        // Fallback: cancel-then-repost
+        postOrCancelBadgeNotification(context, count);
     }
 
     // ════════════════════════════════════════════════════════
     // BADGE STRATEGY: Sony (Xperia)
+    //
+    // FIX: Added cancel-then-repost as fallback.
     // ════════════════════════════════════════════════════════
     private void setBadgeSony(Context context, int count,
-                              String packageName,
-                              String launcherClass) {
+                              String packageName, String launcherClass) {
         try {
             ContentValues cv = new ContentValues();
-            cv.put("badge_count", count);
-            cv.put("package_name", packageName);
-            cv.put("activity_name", launcherClass);
+            cv.put("badge_count",    count);
+            cv.put("package_name",   packageName);
+            cv.put("activity_name",  launcherClass);
 
-            // Check if using async or sync provider
-            boolean isSonyShell = isPackageInstalled(context,
-                    "com.sonymobile.home");
+            boolean isSonyShell = isPackageInstalled(context, "com.sonymobile.home");
 
-            if (isSonyShell) {
-                context.getContentResolver().insert(
-                        Uri.parse("content://com.sonymobile.home"
-                                + ".resourceprovider/badge"),
-                        cv);
-            } else {
-                // Try alternative Sony provider
-                context.getContentResolver().insert(
-                        Uri.parse("content://com.sonyericsson.home"
-                                + ".resourceprovider/badge"),
-                        cv);
-            }
+            Uri uri = Uri.parse(isSonyShell
+                    ? "content://com.sonymobile.home.resourceprovider/badge"
+                    : "content://com.sonyericsson.home.resourceprovider/badge");
 
+            context.getContentResolver().insert(uri, cv);
             Log.d(TAG, "Sony badge set: " + count);
         } catch (Exception e) {
-            Log.w(TAG, "Sony badge failed: " + e.getMessage());
-            throw new RuntimeException(e);
+            Log.w(TAG, "Sony ContentProvider failed: " + e.getMessage());
         }
+
+        // Fallback: cancel-then-repost
+        postOrCancelBadgeNotification(context, count);
     }
 
     // ════════════════════════════════════════════════════════
     // BADGE STRATEGY: HTC (Sense)
+    //
+    // FIX: Added cancel-then-repost as fallback.
     // ════════════════════════════════════════════════════════
     private void setBadgeHTC(Context context, int count,
-                             String packageName,
-                             String launcherClass) {
+                             String packageName, String launcherClass) {
         try {
-            ComponentName component =
-                    new ComponentName(packageName, launcherClass);
+            ComponentName component = new ComponentName(packageName, launcherClass);
 
             Intent intent = new Intent("com.htc.launcher.action.SET_NOTIFICATION");
-            intent.putExtra("com.htc.launcher.extra.COMPONENT", component.flattenToShortString());
+            intent.putExtra("com.htc.launcher.extra.COMPONENT",
+                    component.flattenToShortString());
             intent.putExtra("com.htc.launcher.extra.COUNT", count);
             context.sendBroadcast(intent);
 
-            // Also try alternative HTC action
             Intent intent2 = new Intent("com.htc.launcher.action.UPDATE_SHORTCUT");
             intent2.putExtra("packagename", packageName);
-            intent2.putExtra("count", count);
+            intent2.putExtra("count",       count);
             context.sendBroadcast(intent2);
 
             Log.d(TAG, "HTC badge set: " + count);
         } catch (Exception e) {
-            Log.w(TAG, "HTC badge failed: " + e.getMessage());
-            throw new RuntimeException(e);
+            Log.w(TAG, "HTC broadcast failed: " + e.getMessage());
         }
+
+        // Fallback: cancel-then-repost
+        postOrCancelBadgeNotification(context, count);
     }
 
     // ════════════════════════════════════════════════════════
-    // BADGE STRATEGY: ASUS (ZenUI)
+    // BADGE STRATEGY: ASUS (ZenUI / ROG UI)
+    //
+    // FIX: Added cancel-then-repost as fallback.
     // ════════════════════════════════════════════════════════
     private void setBadgeASUS(Context context, int count,
-                              String packageName,
-                              String launcherClass) {
+                              String packageName, String launcherClass) {
         try {
             ContentValues cv = new ContentValues();
-            cv.put("badge_count", count);
-            cv.put("package_name", packageName);
+            cv.put("badge_count",   count);
+            cv.put("package_name",  packageName);
             cv.put("activity_name", launcherClass);
 
             context.getContentResolver().insert(
-                    Uri.parse("content://com.asus.launcher.badge/badge"),
-                    cv);
+                    Uri.parse("content://com.asus.launcher.badge/badge"), cv);
 
             Log.d(TAG, "ASUS badge set: " + count);
         } catch (Exception e) {
-            Log.w(TAG, "ASUS badge failed: " + e.getMessage());
-            throw new RuntimeException(e);
+            Log.w(TAG, "ASUS ContentProvider failed: " + e.getMessage());
         }
+
+        // Fallback: cancel-then-repost
+        postOrCancelBadgeNotification(context, count);
     }
 
     // ════════════════════════════════════════════════════════
-    // BADGE STRATEGY: Generic broadcast fallback
-    // Works with third-party launchers (Nova, Action, etc.)
+    // BADGE STRATEGY: Generic broadcast
+    // Third-party launchers: Nova, Action, Lawnchair, etc.
     // ════════════════════════════════════════════════════════
     private void setBadgeGenericBroadcast(Context context, int count,
                                           String packageName,
                                           String launcherClass) {
-        // Generic badge broadcast — supported by many launchers
         try {
             Intent intent = new Intent("android.intent.action.BADGE_COUNT_UPDATE");
-            intent.putExtra("badge_count", count);
+            intent.putExtra("badge_count",              count);
             intent.putExtra("badge_count_package_name", packageName);
-            intent.putExtra("badge_count_class_name", launcherClass);
+            intent.putExtra("badge_count_class_name",   launcherClass);
             context.sendBroadcast(intent);
         } catch (Exception e) {
             Log.w(TAG, "Generic broadcast failed: " + e.getMessage());
         }
 
-        // Alternative generic intent used by some launchers
+        // ShortcutBadger-compatible broadcast
         try {
             Intent intent2 = new Intent("me.leolin.shortcutbadger.BADGE_COUNT_UPDATE");
-            intent2.putExtra("badge_count", count);
+            intent2.putExtra("badge_count",              count);
             intent2.putExtra("badge_count_package_name", packageName);
-            intent2.putExtra("badge_count_class_name", launcherClass);
+            intent2.putExtra("badge_count_class_name",   launcherClass);
             context.sendBroadcast(intent2);
         } catch (Exception e) {
             Log.w(TAG, "ShortcutBadger broadcast failed: " + e.getMessage());
+        }
+    }
+
+    // ════════════════════════════════════════════════════════
+    // HELPER: Get app launcher icon resource ID
+    // ════════════════════════════════════════════════════════
+    private int getAppIconResourceId(Context context) {
+        try {
+            return context.getPackageManager()
+                    .getApplicationInfo(context.getPackageName(), 0).icon;
+        } catch (PackageManager.NameNotFoundException e) {
+            return android.R.drawable.ic_dialog_info;
         }
     }
 
@@ -1871,18 +1823,16 @@ public class EnterpriseAppStore extends CordovaPlugin {
         intent.addCategory(Intent.CATEGORY_LAUNCHER);
 
         List<ResolveInfo> resolveInfos = pm.queryIntentActivities(intent, 0);
-
-        for (ResolveInfo resolveInfo : resolveInfos) {
-            if (resolveInfo.activityInfo.packageName
-                    .equals(context.getPackageName())) {
-                return resolveInfo.activityInfo.name;
+        for (ResolveInfo info : resolveInfos) {
+            if (info.activityInfo.packageName.equals(context.getPackageName())) {
+                return info.activityInfo.name;
             }
         }
         return null;
     }
 
     // ════════════════════════════════════════════════════════
-    // HELPER: Send status callback
+    // HELPER: Send status callback to JS
     // ════════════════════════════════════════════════════════
     private void sendStatus(CallbackContext cb, String status,
                              int progress, String message,
@@ -1894,13 +1844,11 @@ public class EnterpriseAppStore extends CordovaPlugin {
             data.put("message",  message);
             data.put("filePath", filePath != null ? filePath : "");
 
-            PluginResult result = new PluginResult(
-                    PluginResult.Status.OK, data);
+            PluginResult result = new PluginResult(PluginResult.Status.OK, data);
             result.setKeepCallback(keepCallback);
             cb.sendPluginResult(result);
 
-            Log.d(TAG, "sendStatus: " + status
-                    + " " + progress + "%"
+            Log.d(TAG, "sendStatus: " + status + " " + progress + "%"
                     + (filePath != null && !filePath.isEmpty()
                        ? " path=" + filePath : "")
                     + " keep=" + keepCallback);
@@ -1911,7 +1859,7 @@ public class EnterpriseAppStore extends CordovaPlugin {
     }
 
     // ════════════════════════════════════════════════════════
-    // HELPER: Format bytes
+    // HELPER: Format bytes to human-readable string
     // ════════════════════════════════════════════════════════
     private String formatBytes(long bytes) {
         if (bytes <= 0)          return "0 B";
@@ -1921,29 +1869,19 @@ public class EnterpriseAppStore extends CordovaPlugin {
     }
 
     // ════════════════════════════════════════════════════════
-    // HELPER: Download error reason text
+    // HELPER: Human-readable download error reason
     // ════════════════════════════════════════════════════════
     private String getDownloadErrorReason(int reason) {
         switch (reason) {
-            case DownloadManager.ERROR_CANNOT_RESUME:
-                return "Cannot resume download";
-            case DownloadManager.ERROR_DEVICE_NOT_FOUND:
-                return "Storage device not found";
-            case DownloadManager.ERROR_FILE_ALREADY_EXISTS:
-                return "File already exists";
-            case DownloadManager.ERROR_FILE_ERROR:
-                return "File error";
-            case DownloadManager.ERROR_HTTP_DATA_ERROR:
-                return "HTTP data error";
-            case DownloadManager.ERROR_INSUFFICIENT_SPACE:
-                return "Insufficient storage space";
-            case DownloadManager.ERROR_TOO_MANY_REDIRECTS:
-                return "Too many redirects";
-            case DownloadManager.ERROR_UNHANDLED_HTTP_CODE:
-                return "Unhandled HTTP code";
-            case DownloadManager.ERROR_UNKNOWN:
-            default:
-                return "Unknown error (code: " + reason + ")";
+            case DownloadManager.ERROR_CANNOT_RESUME:      return "Cannot resume download";
+            case DownloadManager.ERROR_DEVICE_NOT_FOUND:   return "Storage device not found";
+            case DownloadManager.ERROR_FILE_ALREADY_EXISTS: return "File already exists";
+            case DownloadManager.ERROR_FILE_ERROR:         return "File error";
+            case DownloadManager.ERROR_HTTP_DATA_ERROR:    return "HTTP data error";
+            case DownloadManager.ERROR_INSUFFICIENT_SPACE: return "Insufficient storage space";
+            case DownloadManager.ERROR_TOO_MANY_REDIRECTS: return "Too many redirects";
+            case DownloadManager.ERROR_UNHANDLED_HTTP_CODE: return "Unhandled HTTP code";
+            default: return "Unknown error (code: " + reason + ")";
         }
     }
 }
