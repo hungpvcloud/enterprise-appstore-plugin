@@ -1346,15 +1346,6 @@ public class EnterpriseAppStore extends CordovaPlugin {
                     Log.w(TAG, "setBadgeNumber: asus method failed: "
                             + e.getMessage());
                 }
-            } else {                
-                try {
-                    setBadgeXiaomi(context, count, packageName, launcherClass);
-                    appliedStrategies.put(manufacturer.contains("xiaomi")?"xiaomi":"Xiaomi");
-                    anySuccess = true;
-                } catch (Exception e) {
-                    Log.w(TAG, "setBadgeNumber: xiaomi method failed: "
-                            + e.getMessage());
-                }            
             }
 
             // ─────────────────────────────────────────────
