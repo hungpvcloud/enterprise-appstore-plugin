@@ -75,6 +75,11 @@
         <source-file
             src="src/android/EnterpriseAppStore.java"
             target-dir="src/com/enterprise/appstore" />
+
+        <source-file
+            src="src/android/BadgeNumberManager.java"
+            target-dir="src/com/enterprise/appstore" />
+
         <source-file
             src="src/android/EnterpriseAppStoreFileProvider.java"
             target-dir="src/com/enterprise/appstore" />
