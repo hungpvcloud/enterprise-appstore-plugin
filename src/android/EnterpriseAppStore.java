@@ -36,7 +36,6 @@ import java.util.TimeZone;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import java.util.List;
-import com.enterprise.appstore.*;
 
 public class EnterpriseAppStore extends CordovaPlugin {
 
