@@ -54,123 +54,181 @@ public class BadgeNumberManager {
         this.launcherClassName = getLauncherClassName();
     }
 
-    /**
+      /**
      * Main method to set badge number with automatic strategy detection
      * and fallback handling.
      *
-     * @param count Badge count (0 to clear)
-     * @return JSONObject with result details
+     * @param count Badge count. Use 0 to clear badge.
+     * @return JSONObject with result details.
      */
     public JSONObject setBadgeNumber(int count) {
         JSONObject result = new JSONObject();
         JSONArray appliedStrategies = new JSONArray();
-        
+
         try {
-            Log.d(TAG, "setBadgeNumber: count=" + count 
-                    + " manufacturer=" + Build.MANUFACTURER 
-                    + " pkg=" + packageName);
+            int safeCount = Math.max(count, 0);
+
+            Log.d(TAG, "setBadgeNumber called. count=" + safeCount
+                    + ", manufacturer=" + Build.MANUFACTURER
+                    + ", model=" + Build.MODEL
+                    + ", sdkVersion=" + Build.VERSION.SDK_INT
+                    + ", packageName=" + packageName
+                    + ", launcherClassName=" + launcherClassName);
 
             if (launcherClassName == null) {
                 Log.e(TAG, "Launcher class not found");
+
                 result.put("success", false);
+                result.put("badge", safeCount);
+                result.put("manufacturer", Build.MANUFACTURER);
+                result.put("model", Build.MODEL);
+                result.put("sdkVersion", Build.VERSION.SDK_INT);
                 result.put("error", "Launcher not found");
+
                 return result;
             }
 
-            
-            if (count <= 0) {
-                // Use dedicated clear flow for badge count 0.
-                // This prevents stale badge count caused by active notifications.
+            if (safeCount <= 0) {
+                // Use a dedicated clear flow when badge count is 0.
+                // This is important because many Android launchers calculate badge count
+                // from active notifications instead of using the explicit badge number only.
                 return clearBadgeNumber();
             }
 
-
             boolean anySuccess = false;
 
-            // Strategy 1: Android 8+ Notification Badge (Primary)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            String manufacturer = Build.MANUFACTURER == null
+                    ? ""
+                    : Build.MANUFACTURER.toLowerCase(Locale.ROOT);
+
+            boolean isSamsungDevice = manufacturer.contains("samsung");
+
+            boolean isHuaweiDevice = manufacturer.contains("huawei")
+                    || manufacturer.contains("honor");
+
+            boolean isXiaomiDevice = manufacturer.contains("xiaomi")
+                    || manufacturer.contains("redmi")
+                    || manufacturer.contains("poco");
+
+            boolean isOppoDevice = manufacturer.contains("oppo")
+                    || manufacturer.contains("realme")
+                    || manufacturer.contains("oneplus");
+
+            boolean isVivoDevice = manufacturer.contains("vivo")
+                    || manufacturer.contains("iqoo");
+
+            boolean isZteDevice = manufacturer.contains("zte");
+            boolean isSonyDevice = manufacturer.contains("sony");
+            boolean isHtcDevice = manufacturer.contains("htc");
+            boolean isAsusDevice = manufacturer.contains("asus");
+
+            // For Xiaomi/Redmi/POCO, do not run the generic notification badge first.
+            // Running both generic notification badge and Xiaomi-specific badge logic
+            // can make MIUI/HyperOS badge count unstable or duplicated.
+            if (!isXiaomiDevice && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 try {
-                    setNotificationBadge(count);
+                    setNotificationBadge(safeCount);
                     appliedStrategies.put("notification_badge");
                     anySuccess = true;
-                    Log.d(TAG, "Notification badge set ✅");
+
+                    Log.d(TAG, "Generic Android notification badge applied. count=" + safeCount);
                 } catch (Exception e) {
-                    Log.w(TAG, "Notification badge failed: " + e.getMessage());
+                    Log.w(TAG, "Generic Android notification badge failed: " + e.getMessage());
                 }
             }
 
-            // Strategy 2: Vendor-specific methods
-            String manufacturer = Build.MANUFACTURER.toLowerCase(Locale.ROOT);
-            
-            if (manufacturer.contains("samsung")) {
-                if (trySetBadgeSamsung(count, appliedStrategies)) {
+            // Apply vendor-specific badge strategy.
+            // The vendor strategy is still executed after the generic strategy
+            // because some launchers require proprietary APIs or broadcasts.
+            if (isSamsungDevice) {
+                if (trySetBadgeSamsung(safeCount, appliedStrategies)) {
                     anySuccess = true;
                 }
-            } else if (manufacturer.contains("huawei") || manufacturer.contains("honor")) {
-                if (trySetBadgeHuawei(count, appliedStrategies)) {
+            } else if (isHuaweiDevice) {
+                if (trySetBadgeHuawei(safeCount, appliedStrategies)) {
                     anySuccess = true;
                 }
-            } else if (manufacturer.contains("xiaomi") || manufacturer.contains("redmi") 
-                    || manufacturer.contains("poco")) {
-                if (trySetBadgeXiaomi(count, appliedStrategies)) {
+            } else if (isXiaomiDevice) {
+                // Xiaomi/Redmi/POCO use a dedicated flow only.
+                // Do not combine this with the generic badge flow above.
+                if (trySetBadgeXiaomi(safeCount, appliedStrategies)) {
                     anySuccess = true;
                 }
-            } else if (manufacturer.contains("oppo") || manufacturer.contains("realme") 
-                    || manufacturer.contains("oneplus")) {
-                if (trySetBadgeOPPO(count, appliedStrategies)) {
+            } else if (isOppoDevice) {
+                if (trySetBadgeOPPO(safeCount, appliedStrategies)) {
                     anySuccess = true;
                 }
-            } else if (manufacturer.contains("vivo") || manufacturer.contains("iqoo")) {
-                if (trySetBadgeVivo(count, appliedStrategies)) {
+            } else if (isVivoDevice) {
+                if (trySetBadgeVivo(safeCount, appliedStrategies)) {
                     anySuccess = true;
                 }
-            } else if (manufacturer.contains("zte")) {
-                if (trySetBadgeZTE(count, appliedStrategies)) {
+            } else if (isZteDevice) {
+                if (trySetBadgeZTE(safeCount, appliedStrategies)) {
                     anySuccess = true;
                 }
-            } else if (manufacturer.contains("sony")) {
-                if (trySetBadgeSony(count, appliedStrategies)) {
+            } else if (isSonyDevice) {
+                if (trySetBadgeSony(safeCount, appliedStrategies)) {
                     anySuccess = true;
                 }
-            } else if (manufacturer.contains("htc")) {
-                if (trySetBadgeHTC(count, appliedStrategies)) {
+            } else if (isHtcDevice) {
+                if (trySetBadgeHTC(safeCount, appliedStrategies)) {
                     anySuccess = true;
                 }
-            } else if (manufacturer.contains("asus")) {
-                if (trySetBadgeASUS(count, appliedStrategies)) {
+            } else if (isAsusDevice) {
+                if (trySetBadgeASUS(safeCount, appliedStrategies)) {
                     anySuccess = true;
                 }
             }
 
-            // Strategy 3: Generic broadcast (works with third-party launchers)
-            try {
-                trySetBadgeGenericBroadcast(count, appliedStrategies);
-                anySuccess = true;
-            } catch (Exception e) {
-                Log.w(TAG, "Generic broadcast failed: " + e.getMessage());
+            // Send generic badge broadcasts as a final fallback for third-party launchers.
+            // For Xiaomi, this is intentionally skipped here because Xiaomi-specific
+            // logic already sends its own legacy broadcast fallback.
+            if (!isXiaomiDevice) {
+                try {
+                    trySetBadgeGenericBroadcast(safeCount, appliedStrategies);
+                    anySuccess = true;
+
+                    Log.d(TAG, "Generic badge broadcasts sent. count=" + safeCount);
+                } catch (Exception e) {
+                    Log.w(TAG, "Generic badge broadcasts failed: " + e.getMessage());
+                }
             }
 
-            result.put("badge", count);
+            result.put("success", anySuccess);
+            result.put("badge", safeCount);
             result.put("manufacturer", Build.MANUFACTURER);
             result.put("model", Build.MODEL);
             result.put("sdkVersion", Build.VERSION.SDK_INT);
+            result.put("launcherClassName", launcherClassName);
             result.put("strategies", appliedStrategies);
-            result.put("success", anySuccess);
 
             if (anySuccess) {
-                Log.d(TAG, "Badge set successfully: count=" + count 
-                        + " strategies=" + appliedStrategies.toString());
+                Log.d(TAG, "Badge update completed successfully. count=" + safeCount
+                        + ", strategies=" + appliedStrategies.toString());
             } else {
                 result.put("error", "No badge strategy worked");
-                Log.e(TAG, "All strategies failed");
+
+                Log.e(TAG, "Badge update failed. No strategy worked. count=" + safeCount);
             }
 
         } catch (JSONException e) {
             Log.e(TAG, "JSON error in setBadgeNumber", e);
+
             try {
                 result.put("success", false);
+                result.put("badge", Math.max(count, 0));
                 result.put("error", e.getMessage());
-            } catch (JSONException ignored) {}
+            } catch (JSONException ignored) {
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Unexpected error in setBadgeNumber", e);
+
+            try {
+                result.put("success", false);
+                result.put("badge", Math.max(count, 0));
+                result.put("error", e.getMessage());
+            } catch (JSONException ignored) {
+            }
         }
 
         return result;
@@ -410,11 +468,57 @@ public class BadgeNumberManager {
 
     private boolean trySetBadgeXiaomi(int count, JSONArray strategies) {
         try {
-            // Xiaomi relies on notification badge number
-            setNotificationBadge(count);
+            int safeCount = Math.max(count, 0);
+
+            Log.d(TAG, "Xiaomi badge update started. count=" + safeCount
+                    + ", manufacturer=" + Build.MANUFACTURER
+                    + ", model=" + Build.MODEL);
+
+            NotificationManager nm = (NotificationManager)
+                    context.getSystemService(Context.NOTIFICATION_SERVICE);
+
+            if (nm == null) {
+                Log.w(TAG, "NotificationManager is null on Xiaomi badge update");
+                return false;
+            }
+
+            if (safeCount == 0) {
+                // Cancel the internal badge notification.
+                nm.cancel(BADGE_NOTIFICATION_ID);
+
+                try {
+                    // Xiaomi launcher often calculates badge count from active notifications.
+                    // Therefore, all app notifications must be cleared when badge count is 0.
+                    nm.cancelAll();
+                    Log.d(TAG, "All app notifications were cleared on Xiaomi because badge count is 0");
+                } catch (Exception e) {
+                    Log.w(TAG, "Failed to clear all notifications on Xiaomi: " + e.getMessage());
+                }
+
+                // Send generic badge clear broadcasts as additional fallback.
+                sendXiaomiBadgeBroadcast(0);
+
+                strategies.put("xiaomi_clear_notifications");
+                strategies.put("xiaomi_broadcast_clear");
+
+                Log.d(TAG, "Xiaomi badge cleared");
+                return true;
+            }
+
+            // For Xiaomi, update the internal badge notification.
+            // Some MIUI/HyperOS versions use notification count instead of setNumber().
+            // Keeping only one internal badge notification helps reduce incorrect badge increment.
+            setXiaomiNotificationBadge(safeCount);
+
+            // Send legacy broadcast fallback.
+            sendXiaomiBadgeBroadcast(safeCount);
+
             strategies.put("xiaomi_notification");
-            Log.d(TAG, "Xiaomi badge set via notification");
+            strategies.put("xiaomi_broadcast");
+
+            Log.d(TAG, "Xiaomi badge update completed. count=" + safeCount);
             return true;
+
         } catch (Exception e) {
             Log.w(TAG, "Xiaomi badge failed: " + e.getMessage());
             return false;
@@ -689,5 +793,125 @@ public class BadgeNumberManager {
         }
 
         return result;
+    }
+
+    private void setXiaomiNotificationBadge(int count) {
+        NotificationManager nm = (NotificationManager)
+                context.getSystemService(Context.NOTIFICATION_SERVICE);
+
+        if (nm == null) {
+            Log.w(TAG, "NotificationManager is null when setting Xiaomi notification badge");
+            return;
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel channel = nm.getNotificationChannel(BADGE_CHANNEL_ID);
+
+            if (channel == null) {
+                channel = new NotificationChannel(
+                        BADGE_CHANNEL_ID,
+                        BADGE_CHANNEL_NAME,
+                        NotificationManager.IMPORTANCE_MIN
+                );
+
+                // Badge must be enabled for this notification channel.
+                channel.setShowBadge(true);
+
+                // Disable sound, vibration, and lights because this notification is only used for badge update.
+                channel.setSound(null, null);
+                channel.enableVibration(false);
+                channel.enableLights(false);
+
+                nm.createNotificationChannel(channel);
+
+                Log.d(TAG, "Xiaomi badge channel created");
+            } else {
+                // Important:
+                // If the user disabled badge for this channel in system settings,
+                // the app cannot force-enable it programmatically after channel creation.
+                Log.d(TAG, "Xiaomi badge channel exists. canShowBadge=" + channel.canShowBadge());
+            }
+        }
+
+        Notification notification =
+                new NotificationCompat.Builder(context, BADGE_CHANNEL_ID)
+                        .setSmallIcon(getAppIconResourceId())
+
+                        // Xiaomi may ignore empty title/text on some versions.
+                        .setContentTitle(context.getApplicationInfo().loadLabel(context.getPackageManager()))
+                        .setContentText("")
+
+                        // Badge count hint. Xiaomi may or may not respect this value depending on launcher settings.
+                        .setNumber(count)
+
+                        // Keep this notification low priority and silent.
+                        .setPriority(NotificationCompat.PRIORITY_MIN)
+                        .setSilent(true)
+
+                        // Avoid repeated sound/vibration when updating the same notification.
+                        .setOnlyAlertOnce(true)
+
+                        // Keep this notification controlled by badge logic.
+                        .setAutoCancel(false)
+                        .setOngoing(false)
+                        .setLocalOnly(true)
+
+                        // Group internal badge notification separately.
+                        .setGroup("badge_group")
+                        .setGroupSummary(true)
+                        .build();
+
+        // Apply Xiaomi legacy message count by reflection.
+        // Some MIUI versions read extraNotification.messageCount instead of NotificationCompat.setNumber().
+        applyXiaomiLegacyBadgeCount(notification, count);
+
+        // Always use the same notification ID to avoid creating multiple active notifications.
+        nm.notify(BADGE_NOTIFICATION_ID, notification);
+
+        Log.d(TAG, "Xiaomi notification badge posted. count=" + count);
+    }
+
+    private void applyXiaomiLegacyBadgeCount(Notification notification, int count) {
+        try {
+            Object extraNotification = notification.getClass()
+                    .getDeclaredField("extraNotification")
+                    .get(notification);
+
+            if (extraNotification != null) {
+                extraNotification.getClass()
+                        .getDeclaredMethod("setMessageCount", int.class)
+                        .invoke(extraNotification, count);
+
+                Log.d(TAG, "Xiaomi legacy message count applied. count=" + count);
+            }
+        } catch (Exception e) {
+            // This is expected on many Android versions because extraNotification is MIUI-specific.
+            // Do not treat it as a fatal error.
+            Log.d(TAG, "Xiaomi legacy message count is not available: " + e.getMessage());
+        }
+    }
+
+    private void sendXiaomiBadgeBroadcast(int count) {
+        try {
+            Intent intent = new Intent("android.intent.action.APPLICATION_MESSAGE_UPDATE");
+
+            // Xiaomi legacy launcher expects this format:
+            // packageName/className
+            intent.putExtra(
+                    "android.intent.extra.update_application_component_name",
+                    packageName + "/" + launcherClassName
+            );
+
+            intent.putExtra(
+                    "android.intent.extra.update_application_message_text",
+                    count == 0 ? "" : String.valueOf(count)
+            );
+
+            context.sendBroadcast(intent);
+
+            Log.d(TAG, "Xiaomi legacy badge broadcast sent. count=" + count);
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to send Xiaomi legacy badge broadcast: " + e.getMessage());
+        }
     }
 }
