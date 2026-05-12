@@ -42,6 +42,7 @@ public class BadgeNumberManager {
     private static final String BADGE_CHANNEL_ID = "badge_channel";
     private static final String BADGE_CHANNEL_NAME = "App Badge";
     private static final int BADGE_NOTIFICATION_ID = 9999;
+    private static final boolean CLEAR_ALL_NOTIFICATIONS_WHEN_BADGE_ZERO = true;
 
     private Context context;
     private String packageName;
@@ -75,6 +76,14 @@ public class BadgeNumberManager {
                 result.put("error", "Launcher not found");
                 return result;
             }
+
+            
+            if (count <= 0) {
+                // Use dedicated clear flow for badge count 0.
+                // This prevents stale badge count caused by active notifications.
+                return clearBadgeNumber();
+            }
+
 
             boolean anySuccess = false;
 
@@ -172,49 +181,98 @@ public class BadgeNumberManager {
     // ═══════════════════════════════════════════════════════════
 
     private void setNotificationBadge(int count) {
-        NotificationManager nm = (NotificationManager) 
-                context.getSystemService(Context.NOTIFICATION_SERVICE);
+            NotificationManager nm = (NotificationManager)
+                    context.getSystemService(Context.NOTIFICATION_SERVICE);
 
-        if (count <= 0) {
-            nm.cancel(BADGE_NOTIFICATION_ID);
-            Log.d(TAG, "Badge notification cleared");
-            return;
-        }
-
-        // Create channel if not exists
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = nm.getNotificationChannel(BADGE_CHANNEL_ID);
-            if (channel == null) {
-                channel = new NotificationChannel(
-                        BADGE_CHANNEL_ID,
-                        BADGE_CHANNEL_NAME,
-                        NotificationManager.IMPORTANCE_MIN
-                );
-                channel.setShowBadge(true);
-                channel.setSound(null, null);
-                channel.enableVibration(false);
-                channel.enableLights(false);
-                nm.createNotificationChannel(channel);
-                Log.d(TAG, "Badge channel created");
+            if (nm == null) {
+                Log.w(TAG, "NotificationManager is null");
+                return;
             }
+
+            if (count <= 0) {
+                // Cancel the internal badge notification used by this plugin.
+                nm.cancel(BADGE_NOTIFICATION_ID);
+
+                // Important:
+                // On many Android launchers, especially Samsung OneUI and modern Android versions,
+                // the app icon badge is calculated from active notifications.
+                // If active push notifications still exist in the notification tray,
+                // the launcher may continue showing badge count even after setting badge to 0.
+                if (CLEAR_ALL_NOTIFICATIONS_WHEN_BADGE_ZERO) {
+                    try {
+                        nm.cancelAll();
+                        Log.d(TAG, "All app notifications were cleared because badge count is 0");
+                    } catch (Exception e) {
+                        Log.w(TAG, "Failed to clear all notifications: " + e.getMessage());
+                    }
+                }
+
+                Log.d(TAG, "Badge notification cleared");
+                return;
+            }
+
+            // Create notification channel for Android 8.0+.
+            // The channel must allow badge display, otherwise launcher may ignore badge count.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                NotificationChannel channel = nm.getNotificationChannel(BADGE_CHANNEL_ID);
+
+                if (channel == null) {
+                    channel = new NotificationChannel(
+                            BADGE_CHANNEL_ID,
+                            BADGE_CHANNEL_NAME,
+                            NotificationManager.IMPORTANCE_MIN
+                    );
+
+                    // Allow this notification channel to show app icon badge.
+                    channel.setShowBadge(true);
+
+                    // Disable sound, vibration, and light because this notification is used only for badge update.
+                    channel.setSound(null, null);
+                    channel.enableVibration(false);
+                    channel.enableLights(false);
+
+                    nm.createNotificationChannel(channel);
+                    Log.d(TAG, "Badge notification channel created");
+                }
+            }
+
+            NotificationCompat.Builder builder =
+                    new NotificationCompat.Builder(context, BADGE_CHANNEL_ID)
+                            .setSmallIcon(getAppIconResourceId())
+
+                            // Keep title valid. Some Android versions do not like empty title/text.
+                            .setContentTitle(context.getApplicationInfo().loadLabel(context.getPackageManager()))
+
+                            // Keep content minimal because this notification is only for badge count.
+                            .setContentText("")
+
+                            // Set the badge number hint for supported launchers.
+                            .setNumber(count)
+
+                            // Keep notification low priority and silent.
+                            .setPriority(NotificationCompat.PRIORITY_MIN)
+                            .setSilent(true)
+
+                            // Do not make this notification persistent.
+                            .setOngoing(false)
+
+                            // Do not auto cancel because this notification is controlled by badge logic.
+                            .setAutoCancel(false)
+
+                            // Avoid alerting again when updating the same badge notification.
+                            .setOnlyAlertOnce(true)
+
+                            // Keep notification local to this device.
+                            .setLocalOnly(true)
+
+                            // Group this internal badge notification separately.
+                            .setGroup("badge_group")
+                            .setGroupSummary(true);
+
+            nm.notify(BADGE_NOTIFICATION_ID, builder.build());
+
+            Log.d(TAG, "Notification badge updated: " + count);
         }
-
-        // Build silent badge notification
-        NotificationCompat.Builder builder = new NotificationCompat.Builder(context, BADGE_CHANNEL_ID)
-                .setSmallIcon(getAppIconResourceId())
-                .setContentTitle("")
-                .setContentText("")
-                .setNumber(count)
-                .setPriority(NotificationCompat.PRIORITY_MIN)
-                .setSilent(true)
-                .setOngoing(false)
-                .setAutoCancel(false)
-                .setGroup("badge_group")
-                .setGroupSummary(true);
-
-        nm.notify(BADGE_NOTIFICATION_ID, builder.build());
-        Log.d(TAG, "Notification badge set: " + count);
-    }
 
     private int getAppIconResourceId() {
         try {
@@ -232,48 +290,100 @@ public class BadgeNumberManager {
 
     private boolean trySetBadgeSamsung(int count, JSONArray strategies) {
         try {
-            // Method 1: Samsung BadgeProvider
             Uri uri = Uri.parse("content://com.sec.badge/apps");
+
             ContentValues cv = new ContentValues();
+
+            // Use non-negative badge count only.
+            int safeCount = Math.max(count, 0);
+
             cv.put("package", packageName);
             cv.put("class", launcherClassName);
-            cv.put("badgecount", count);
+            cv.put("badgecount", safeCount);
 
             try {
                 android.database.Cursor cursor = context.getContentResolver().query(
-                        uri, null, "package=?",
-                        new String[]{packageName}, null);
+                        uri,
+                        null,
+                        "package=?",
+                        new String[]{packageName},
+                        null
+                );
+
+                boolean exists = false;
 
                 if (cursor != null) {
-                    if (cursor.moveToFirst()) {
-                        if (count > 0) {
-                            context.getContentResolver().update(uri, cv, "package=?",
-                                    new String[]{packageName});
-                        } else {
-                            context.getContentResolver().delete(uri, "package=?",
-                                    new String[]{packageName});
-                        }
-                    } else if (count > 0) {
-                        context.getContentResolver().insert(uri, cv);
-                    }
+                    exists = cursor.moveToFirst();
                     cursor.close();
                 }
-                strategies.put("samsung_provider");
-                Log.d(TAG, "Samsung badge set via provider");
-                return true;
-            } catch (Exception e1) {
-                // Fallback to broadcast
+
+                if (exists) {
+                    // Update badge count first.
+                    // For count = 0, updating badgecount to 0 is safer than deleting only.
+                    int updated = context.getContentResolver().update(
+                            uri,
+                            cv,
+                            "package=?",
+                            new String[]{packageName}
+                    );
+
+                    Log.d(TAG, "Samsung badge provider updated. rows=" + updated + ", count=" + safeCount);
+
+                    if (safeCount == 0) {
+                        try {
+                            // Some older Samsung launchers clear badge only after deleting the provider row.
+                            // Therefore, we update to 0 first, then try deleting as an additional cleanup.
+                            int deleted = context.getContentResolver().delete(
+                                    uri,
+                                    "package=?",
+                                    new String[]{packageName}
+                            );
+
+                            Log.d(TAG, "Samsung badge provider row deleted for clear. rows=" + deleted);
+                        } catch (Exception deleteEx) {
+                            Log.w(TAG, "Samsung badge provider delete failed: " + deleteEx.getMessage());
+                        }
+                    }
+                } else {
+                    if (safeCount > 0) {
+                        // Insert badge row only when badge count is greater than 0.
+                        context.getContentResolver().insert(uri, cv);
+                        Log.d(TAG, "Samsung badge provider inserted. count=" + safeCount);
+                    } else {
+                        // Do not insert a new row with 0 count.
+                        Log.d(TAG, "Samsung badge provider row not found and count is 0. Insert skipped.");
+                    }
+                }
+
+                // Send Samsung-compatible badge broadcast as an additional fallback.
                 Intent intent = new Intent("android.intent.action.BADGE_COUNT_UPDATE");
-                intent.putExtra("badge_count", count);
+                intent.putExtra("badge_count", safeCount);
                 intent.putExtra("badge_count_package_name", packageName);
                 intent.putExtra("badge_count_class_name", launcherClassName);
                 context.sendBroadcast(intent);
+
+                strategies.put("samsung_provider");
                 strategies.put("samsung_broadcast");
-                Log.d(TAG, "Samsung badge set via broadcast");
+
+                Log.d(TAG, "Samsung badge update completed. count=" + safeCount);
+                return true;
+
+            } catch (Exception providerEx) {
+                // Fallback to Samsung badge broadcast when content provider is not available.
+                Intent intent = new Intent("android.intent.action.BADGE_COUNT_UPDATE");
+                intent.putExtra("badge_count", safeCount);
+                intent.putExtra("badge_count_package_name", packageName);
+                intent.putExtra("badge_count_class_name", launcherClassName);
+                context.sendBroadcast(intent);
+
+                strategies.put("samsung_broadcast");
+
+                Log.d(TAG, "Samsung badge updated via broadcast fallback. count=" + safeCount);
                 return true;
             }
+
         } catch (Exception e) {
-            Log.w(TAG, "Samsung badge failed: " + e.getMessage());
+            Log.w(TAG, "Samsung badge update failed: " + e.getMessage());
             return false;
         }
     }
@@ -499,5 +609,85 @@ public class BadgeNumberManager {
             }
         }
         return null;
+    }
+
+    public JSONObject clearBadgeNumber() {
+        JSONObject result = new JSONObject();
+        JSONArray appliedStrategies = new JSONArray();
+
+        try {
+            Log.d(TAG, "clearBadgeNumber called");
+
+            NotificationManager nm = (NotificationManager)
+                    context.getSystemService(Context.NOTIFICATION_SERVICE);
+
+            if (nm != null) {
+                // Cancel the internal badge notification used by this plugin.
+                nm.cancel(BADGE_NOTIFICATION_ID);
+
+                try {
+                    // Clear all active notifications of this app.
+                    // This is important because many launchers calculate badge count
+                    // based on active notifications in the notification tray.
+                    nm.cancelAll();
+                    appliedStrategies.put("notification_cancel_all");
+
+                    Log.d(TAG, "All app notifications were cleared");
+                } catch (Exception e) {
+                    Log.w(TAG, "Failed to clear all notifications: " + e.getMessage());
+                }
+            }
+
+            String manufacturer = Build.MANUFACTURER.toLowerCase(Locale.ROOT);
+
+            // Apply vendor-specific clear logic.
+            if (manufacturer.contains("samsung")) {
+                trySetBadgeSamsung(0, appliedStrategies);
+            } else if (manufacturer.contains("huawei") || manufacturer.contains("honor")) {
+                trySetBadgeHuawei(0, appliedStrategies);
+            } else if (manufacturer.contains("xiaomi")
+                    || manufacturer.contains("redmi")
+                    || manufacturer.contains("poco")) {
+                trySetBadgeXiaomi(0, appliedStrategies);
+            } else if (manufacturer.contains("oppo")
+                    || manufacturer.contains("realme")
+                    || manufacturer.contains("oneplus")) {
+                trySetBadgeOPPO(0, appliedStrategies);
+            } else if (manufacturer.contains("vivo") || manufacturer.contains("iqoo")) {
+                trySetBadgeVivo(0, appliedStrategies);
+            } else if (manufacturer.contains("zte")) {
+                trySetBadgeZTE(0, appliedStrategies);
+            } else if (manufacturer.contains("sony")) {
+                trySetBadgeSony(0, appliedStrategies);
+            } else if (manufacturer.contains("htc")) {
+                trySetBadgeHTC(0, appliedStrategies);
+            } else if (manufacturer.contains("asus")) {
+                trySetBadgeASUS(0, appliedStrategies);
+            }
+
+            // Send generic badge clear broadcasts as final fallback.
+            trySetBadgeGenericBroadcast(0, appliedStrategies);
+
+            result.put("success", true);
+            result.put("badge", 0);
+            result.put("manufacturer", Build.MANUFACTURER);
+            result.put("model", Build.MODEL);
+            result.put("sdkVersion", Build.VERSION.SDK_INT);
+            result.put("strategies", appliedStrategies);
+
+            Log.d(TAG, "Badge cleared successfully. strategies=" + appliedStrategies.toString());
+
+        } catch (Exception e) {
+            Log.e(TAG, "clearBadgeNumber failed", e);
+
+            try {
+                result.put("success", false);
+                result.put("badge", 0);
+                result.put("error", e.getMessage());
+            } catch (JSONException ignored) {
+            }
+        }
+
+        return result;
     }
 }
